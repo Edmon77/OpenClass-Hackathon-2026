@@ -200,6 +200,213 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // ─── Course management ────────────────────────────────────────
+
+  app.get('/courses', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const courses = await prisma.course.findMany({
+      orderBy: { courseName: 'asc' },
+      include: {
+        teacher: { select: { name: true, studentId: true } },
+        semester: { select: { name: true, isActive: true } },
+      },
+    });
+    return {
+      courses: courses.map((c) => ({
+        id: c.id,
+        course_name: c.courseName,
+        course_code: c.courseCode,
+        department: c.department,
+        year: c.year,
+        class_section: c.classSection,
+        teacher_name: c.teacher.name,
+        teacher_student_id: c.teacher.studentId,
+        semester_name: c.semester.name,
+        semester_id: c.semesterId,
+        is_active: c.isActive,
+      })),
+    };
+  });
+
+  const adminCourseBody = z.object({
+    courseName: z.string().min(1),
+    courseCode: z.string().optional(),
+    teacherStudentId: z.string().min(1),
+    department: z.string().min(1),
+    year: z.number().int(),
+    classSection: z.string().min(1),
+    semesterId: z.string().uuid().optional(),
+    teacherContact: z.string().optional(),
+  });
+
+  app.post('/courses', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const parsed = adminCourseBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    const d = parsed.data;
+
+    let semId = d.semesterId;
+    if (!semId) {
+      const active = await prisma.semester.findFirst({ where: { isActive: true } });
+      if (!active) return reply.status(400).send({ error: 'No active semester. Create one first.' });
+      semId = active.id;
+    }
+
+    const teacher = await prisma.user.findFirst({
+      where: { studentId: d.teacherStudentId.trim().toUpperCase(), role: 'teacher', isActive: true },
+    });
+    if (!teacher) return reply.status(404).send({ error: `Teacher ${d.teacherStudentId} not found` });
+
+    const course = await prisma.course.create({
+      data: {
+        courseName: d.courseName.trim(),
+        courseCode: d.courseCode?.trim() ?? null,
+        department: d.department.trim(),
+        year: d.year,
+        classSection: d.classSection.trim(),
+        semesterId: semId,
+        teacherUserId: teacher.id,
+        teacherContact: d.teacherContact?.trim() ?? null,
+      },
+    });
+    return { id: course.id, course_name: course.courseName };
+  });
+
+  const adminCourseUpdate = z.object({
+    courseName: z.string().min(1).optional(),
+    courseCode: z.string().optional(),
+    teacherStudentId: z.string().min(1).optional(),
+    department: z.string().min(1).optional(),
+    year: z.number().int().optional(),
+    classSection: z.string().min(1).optional(),
+    teacherContact: z.string().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.put('/courses/:id', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const { id } = request.params as { id: string };
+    const parsed = adminCourseUpdate.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    const d = parsed.data;
+
+    const existing = await prisma.course.findUnique({ where: { id } });
+    if (!existing) return reply.status(404).send({ error: 'Course not found' });
+
+    let teacherUserId = existing.teacherUserId;
+    if (d.teacherStudentId) {
+      const teacher = await prisma.user.findFirst({
+        where: { studentId: d.teacherStudentId.trim().toUpperCase(), role: 'teacher', isActive: true },
+      });
+      if (!teacher) return reply.status(404).send({ error: `Teacher ${d.teacherStudentId} not found` });
+      teacherUserId = teacher.id;
+    }
+
+    await prisma.course.update({
+      where: { id },
+      data: {
+        courseName: d.courseName?.trim() ?? existing.courseName,
+        courseCode: d.courseCode?.trim() ?? existing.courseCode,
+        department: d.department?.trim() ?? existing.department,
+        year: d.year ?? existing.year,
+        classSection: d.classSection?.trim() ?? existing.classSection,
+        teacherUserId,
+        teacherContact: d.teacherContact?.trim() ?? existing.teacherContact,
+        isActive: d.isActive ?? existing.isActive,
+      },
+    });
+    return { ok: true };
+  });
+
+  app.delete('/courses/:id', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const { id } = request.params as { id: string };
+    await prisma.course.update({ where: { id }, data: { isActive: false } });
+    return { ok: true };
+  });
+
+  const bulkCourseRow = z.object({
+    courseName: z.string().min(1),
+    courseCode: z.string().optional(),
+    teacherStudentId: z.string().min(1),
+    department: z.string().min(1),
+    year: z.number().int(),
+    classSection: z.string().min(1),
+    teacherContact: z.string().optional(),
+  });
+
+  app.post('/courses/bulk', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const parsed = z.object({ courses: z.array(bulkCourseRow).min(1).max(500) }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body: courses array (max 500)' });
+
+    const sem = await prisma.semester.findFirst({ where: { isActive: true } });
+    if (!sem) return reply.status(400).send({ error: 'No active semester' });
+
+    let created = 0;
+    let skipped = 0;
+    for (const row of parsed.data.courses) {
+      const teacher = await prisma.user.findFirst({
+        where: { studentId: row.teacherStudentId.trim().toUpperCase(), role: 'teacher', isActive: true },
+      });
+      if (!teacher) { skipped++; continue; }
+
+      await prisma.course.create({
+        data: {
+          courseName: row.courseName.trim(),
+          courseCode: row.courseCode?.trim() ?? null,
+          department: row.department.trim(),
+          year: row.year,
+          classSection: row.classSection.trim(),
+          semesterId: sem.id,
+          teacherUserId: teacher.id,
+          teacherContact: row.teacherContact?.trim() ?? null,
+        },
+      });
+      created++;
+    }
+    return { ok: true, created, skipped };
+  });
+
+  // ─── User edit ───────────────────────────────────────────────
+
+  const userUpdate = z.object({
+    name: z.string().min(1).optional(),
+    role: z.enum(['student', 'teacher', 'admin']).optional(),
+    department: z.string().nullable().optional(),
+    year: z.number().int().nullable().optional(),
+    classSection: z.string().nullable().optional(),
+    isActive: z.boolean().optional(),
+    forcePasswordChange: z.boolean().optional(),
+    password: z.string().min(6).optional(),
+  });
+
+  app.put('/users/:id', async (request, reply) => {
+    if (!adminOr403(request, reply)) return;
+    const { id } = request.params as { id: string };
+    const parsed = userUpdate.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    const d = parsed.data;
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return reply.status(404).send({ error: 'User not found' });
+
+    const data: Record<string, unknown> = {};
+    if (d.name !== undefined) data.name = d.name;
+    if (d.role !== undefined) data.role = d.role as Role;
+    if (d.department !== undefined) data.department = d.department;
+    if (d.year !== undefined) data.year = d.year;
+    if (d.classSection !== undefined) data.classSection = d.classSection;
+    if (d.isActive !== undefined) data.isActive = d.isActive;
+    if (d.forcePasswordChange !== undefined) data.forcePasswordChange = d.forcePasswordChange;
+    if (d.password) data.passwordHash = await bcrypt.hash(d.password, 12);
+
+    await prisma.user.update({ where: { id }, data });
+    return { ok: true };
+  });
+
+  // ─── Bulk user import ────────────────────────────────────────
+
   const bulkUserRow = z.object({
     studentId: z.string().min(1),
     name: z.string().min(1),

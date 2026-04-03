@@ -20,6 +20,7 @@ type HubCard = {
 const cards: HubCard[] = [
   { title: 'Users', subtitle: 'Create, import, and manage accounts', icon: 'people', color: colors.accent, bg: colors.accentMuted, route: '/(app)/(tabs)/(admin)/users' },
   { title: 'Buildings & Rooms', subtitle: 'Manage campus infrastructure', icon: 'business', color: colors.campus, bg: colors.campusMuted, route: '/(app)/(tabs)/(admin)/buildings-rooms' },
+  { title: 'Courses', subtitle: 'Create, import, and manage courses', icon: 'book', color: '#34C759', bg: 'rgba(52,199,89,0.12)', route: '/(app)/(tabs)/(admin)/courses' },
   { title: 'Semesters', subtitle: 'Create, activate, and archive', icon: 'calendar', color: '#AF52DE', bg: 'rgba(175,82,222,0.12)', route: '/(app)/(tabs)/(admin)/semesters' },
   { title: 'CR Assignments', subtitle: 'Assign class representatives', icon: 'school', color: '#FF9500', bg: 'rgba(255,149,0,0.12)', route: '/(app)/(tabs)/(admin)/cr-assignments' },
 ];

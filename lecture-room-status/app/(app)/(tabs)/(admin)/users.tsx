@@ -9,6 +9,8 @@ import {
   RefreshControl,
   Alert,
   FlatList,
+  Modal,
+  Switch,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Animated from 'react-native-reanimated';
@@ -19,10 +21,10 @@ import { isApiConfigured } from '@/src/api/config';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
 import { GroupedCard } from '@/src/components/ui/GroupedCard';
 import { PrimaryButton } from '@/src/components/ui/PrimaryButton';
-import { enterFromBottom } from '@/src/theme/motion';
+import { enterFromBottom, PRESS_SCALE } from '@/src/theme/motion';
 import { colors, radius, space, type, shadows } from '@/src/theme/tokens';
 
-type UserRow = { id: string; studentId: string; name: string; role: string; department: string | null; year: number | null; classSection: string | null; isActive: boolean };
+type UserRow = { id: string; studentId: string; name: string; role: string; department: string | null; year: number | null; classSection: string | null; isActive: boolean; forcePasswordChange?: boolean };
 
 export default function UsersScreen() {
   const { user } = useAuth();
@@ -38,6 +40,15 @@ export default function UsersScreen() {
   const [bulkText, setBulkText] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
+  const [editUser, setEditUser] = useState<UserRow | null>(null);
+  const [eName, setEName] = useState('');
+  const [eRole, setERole] = useState<'student' | 'teacher' | 'admin'>('student');
+  const [eDept, setEDept] = useState('');
+  const [eYear, setEYear] = useState('');
+  const [eClass, setEClass] = useState('');
+  const [ePassword, setEPassword] = useState('');
+  const [eActive, setEActive] = useState(true);
+  const [eForceChange, setEForceChange] = useState(false);
 
   const load = useCallback(async () => {
     if (!isApiConfigured() || user?.role !== 'admin') return;
@@ -88,6 +99,40 @@ export default function UsersScreen() {
     } catch (e) { Alert.alert('Error', String(e)); }
   }
 
+  function openEdit(u: UserRow) {
+    setEditUser(u);
+    setEName(u.name);
+    setERole(u.role as any);
+    setEDept(u.department ?? '');
+    setEYear(u.year != null ? String(u.year) : '');
+    setEClass(u.classSection ?? '');
+    setEPassword('');
+    setEActive(u.isActive);
+    setEForceChange(u.forcePasswordChange ?? false);
+  }
+
+  async function saveEdit() {
+    if (!editUser) return;
+    const y = eYear.trim() ? parseInt(eYear, 10) : null;
+    try {
+      await apiFetch(`/admin/users/${editUser.id}`, {
+        method: 'PUT',
+        json: {
+          name: eName.trim() || undefined,
+          role: eRole,
+          department: eDept.trim() || null,
+          year: y != null && Number.isFinite(y) ? y : null,
+          classSection: eClass.trim() || null,
+          isActive: eActive,
+          forcePasswordChange: eForceChange,
+          password: ePassword.trim() || undefined,
+        },
+      });
+      setEditUser(null); await load();
+      Alert.alert('Saved', 'User updated.');
+    } catch (e) { Alert.alert('Error', String(e)); }
+  }
+
   function roleBadge(r: string) {
     if (r === 'admin') return { color: colors.destructive, bg: 'rgba(255,59,48,0.12)' };
     if (r === 'teacher') return { color: colors.accent, bg: colors.accentMuted };
@@ -95,6 +140,7 @@ export default function UsersScreen() {
   }
 
   return (
+    <>
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.campus} />}>
       {/* Actions */}
       <View style={styles.actionsRow}>
@@ -143,19 +189,60 @@ export default function UsersScreen() {
         const rb = roleBadge(u.role);
         return (
           <Animated.View key={u.id} entering={enterFromBottom(i)}>
-            <View style={styles.userCard}>
+            <Pressable
+              onPress={() => openEdit(u)}
+              style={({ pressed }) => [styles.userCard, pressed && { transform: [{ scale: PRESS_SCALE }] }]}
+            >
               <View style={{ flex: 1 }}>
                 <Text style={styles.userNameText}>{u.name}</Text>
-                <Text style={styles.userIdText}>{u.studentId}{u.department ? ` · ${u.department}` : ''}</Text>
+                <Text style={styles.userIdText}>{u.studentId}{u.department ? ` · ${u.department}` : ''}{u.year ? ` · Y${u.year}` : ''}{u.classSection ? ` · ${u.classSection}` : ''}</Text>
               </View>
               <View style={[styles.rolePill, { backgroundColor: rb.bg }]}>
                 <Text style={[styles.roleText, { color: rb.color }]}>{u.role}</Text>
               </View>
-            </View>
+            </Pressable>
           </Animated.View>
         );
       })}
     </ScrollView>
+
+    {/* Edit user modal */}
+    <Modal visible={editUser !== null} animationType="slide" transparent>
+      <View style={styles.modalOverlay}>
+        <Pressable style={styles.modalDismiss} onPress={() => setEditUser(null)} />
+        <ScrollView style={styles.modalSheet} contentContainerStyle={{ padding: space.xl, paddingBottom: 40 }}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Edit {editUser?.studentId}</Text>
+          <TextInput style={styles.input} placeholder="Name" value={eName} onChangeText={setEName} placeholderTextColor={colors.tertiaryLabel} />
+          <View style={styles.pillRow}>
+            {(['student', 'teacher', 'admin'] as const).map((r) => (
+              <Pressable key={r} onPress={() => setERole(r)} style={[styles.pill, eRole === r && styles.pillOn]}>
+                <Text style={eRole === r ? styles.pillTextOn : styles.pillTextOff}>{r}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <TextInput style={styles.input} placeholder="Department" value={eDept} onChangeText={setEDept} placeholderTextColor={colors.tertiaryLabel} />
+          <TextInput style={styles.input} placeholder="Year" value={eYear} onChangeText={setEYear} keyboardType="number-pad" placeholderTextColor={colors.tertiaryLabel} />
+          <TextInput style={styles.input} placeholder="Class section" value={eClass} onChangeText={setEClass} placeholderTextColor={colors.tertiaryLabel} />
+          <TextInput style={styles.input} placeholder="New password (leave blank to keep)" secureTextEntry value={ePassword} onChangeText={setEPassword} placeholderTextColor={colors.tertiaryLabel} />
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Active</Text>
+            <Switch value={eActive} onValueChange={setEActive} trackColor={{ true: colors.campus }} />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Force password change</Text>
+            <Switch value={eForceChange} onValueChange={setEForceChange} trackColor={{ true: colors.campus }} />
+          </View>
+          <View style={styles.modalActions}>
+            <Pressable onPress={() => setEditUser(null)}>
+              <Text style={styles.cancelLink}>Cancel</Text>
+            </Pressable>
+            <PrimaryButton title="Save" onPress={saveEdit} style={{ flex: 1, marginLeft: space.md }} />
+          </View>
+        </ScrollView>
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -179,4 +266,13 @@ const styles = StyleSheet.create({
   userIdText: { ...type.caption1, color: colors.secondaryLabel, marginTop: 2 },
   rolePill: { paddingHorizontal: space.sm, paddingVertical: 3, borderRadius: radius.pill },
   roleText: { ...type.caption2, fontWeight: '700' },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.sm },
+  switchLabel: { ...type.subhead, color: colors.label },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay },
+  modalDismiss: { flex: 1 },
+  modalSheet: { backgroundColor: colors.systemBackground, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, maxHeight: '85%' },
+  modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.fill, alignSelf: 'center', marginBottom: space.md },
+  modalTitle: { ...type.title2, color: colors.label, marginBottom: space.md },
+  modalActions: { flexDirection: 'row', alignItems: 'center', marginTop: space.md },
+  cancelLink: { ...type.headline, color: colors.destructive },
 });

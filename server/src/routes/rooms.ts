@@ -140,6 +140,7 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
           start_time: b.startTime.toISOString(),
           end_time: b.endTime.toISOString(),
           status: b.status,
+          event_type: b.eventType,
           course_id: b.courseId,
           course_name: b.course.courseName,
         })),

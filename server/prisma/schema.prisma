@@ -25,6 +25,15 @@ enum AlertSubscriptionStatus {
   cancelled
 }
 
+enum EventType {
+  lecture
+  exam
+  tutor
+  defense
+  lab
+  presentation
+}
+
 enum NotificationType {
   advance
   class_start
@@ -122,6 +131,7 @@ model Booking {
   department    String?
   year          Int?
   classSection  String?       @map("class_section")
+  eventType               EventType     @default(lecture) @map("event_type")
   startTime               DateTime      @map("start_time")
   endTime                 DateTime      @map("end_time")
   status                  BookingStatus
