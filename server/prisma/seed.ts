@@ -4,23 +4,78 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const FACULTY_DEPTS: Record<string, string[]> = {
+  'Bahir Dar Energy Center': ['Sustainable Energy Engineering'],
+  'BiT SANS and Pre-Engineering': ['BiT SANS and Pre-Engineering'],
+  'Faculty of Chemical and Food Engineering': [
+    'Applied Human Nutrition',
+    'Chemical Engineering',
+    'Food Technology and Process Engineering',
+  ],
+  'Faculty of Civil and Water Resources Engineering': [
+    'Civil Engineering',
+    'Hydraulic and Water Resource Engineering',
+    'Water Resource Engineering',
+    'Water Resources and Environmental Engineering',
+    'Water Resources and Irrigation Engineering',
+  ],
+  'Faculty of Computing': [
+    'Artificial Intelligence and Data Science',
+    'Computer Science',
+    'Cyber Security',
+    'Information Systems',
+    'Information Technology',
+    'Pre-Fresh(Computing)',
+    'Software Engineering',
+  ],
+  'Faculty of Electrical and Computer Engineering': ['Computer Engineering', 'Electrical Engineering'],
+  'Faculty of Mechanical and Industrial Engineering': [
+    'Automotive Engineering',
+    'Industrial Engineering',
+    'Mechanical Engineering',
+  ],
+  'School of Materials Science and Engineering': ['Materials Science and Engineering'],
+};
+
 async function main() {
-  const sem = await prisma.semester.upsert({
+  const ay = await prisma.academicYear.upsert({
     where: { id: '00000000-0000-0000-0000-000000000001' },
     create: {
       id: '00000000-0000-0000-0000-000000000001',
-      name: '2026 Semester 1',
+      name: '2026 Academic Year',
       startDate: new Date('2026-01-01'),
-      endDate: new Date('2026-06-30'),
+      endDate: new Date('2026-12-31'),
       isActive: true,
     },
     update: {},
   });
 
+  const facultyIds = new Map<string, string>();
+  const deptIds = new Map<string, string>();
+
+  for (const [facName, depts] of Object.entries(FACULTY_DEPTS)) {
+    const f = await prisma.faculty.upsert({
+      where: { name: facName },
+      create: { name: facName },
+      update: {},
+    });
+    facultyIds.set(facName, f.id);
+    for (const dName of depts) {
+      const d = await prisma.department.upsert({
+        where: { facultyId_name: { facultyId: f.id, name: dName } },
+        create: { name: dName, facultyId: f.id },
+        update: {},
+      });
+      deptIds.set(`${facName}|${dName}`, d.id);
+    }
+  }
+
+  const seDeptId = deptIds.get('Faculty of Computing|Software Engineering')!;
+
   const hash = (p: string) => bcrypt.hash(p, 12);
 
   const adminPw = await hash('admin123');
-  const admin = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { studentId: 'ADMIN001' },
     create: {
       studentId: 'ADMIN001',
@@ -45,14 +100,14 @@ async function main() {
       name: 'Dr. Abebe',
       passwordHash: teacherPw,
       role: 'teacher',
-      department: 'Software Engineering',
+      gender: 'M',
       forcePasswordChange: false,
     },
     update: {
       passwordHash: teacherPw,
       name: 'Dr. Abebe',
       role: 'teacher',
-      department: 'Software Engineering',
+      gender: 'M',
       forcePasswordChange: false,
     },
   });
@@ -65,17 +120,25 @@ async function main() {
       name: 'Eden Student',
       passwordHash: stuPw,
       role: 'student',
-      department: 'Software Engineering',
+      gender: 'M',
+      facultyId: facultyIds.get('Faculty of Computing')!,
+      departmentId: seDeptId,
+      program: 'Degree',
+      fieldOfStudy: 'Software Engineering',
+      admissionType: 'Regular',
       year: 5,
-      classSection: 'A',
+      section: 'A',
       forcePasswordChange: true,
     },
     update: {
       passwordHash: stuPw,
       name: 'Eden Student',
-      department: 'Software Engineering',
+      facultyId: facultyIds.get('Faculty of Computing')!,
+      departmentId: seDeptId,
+      program: 'Degree',
+      fieldOfStudy: 'Software Engineering',
       year: 5,
-      classSection: 'A',
+      section: 'A',
       forcePasswordChange: true,
     },
   });
@@ -88,17 +151,22 @@ async function main() {
       name: 'Class Rep',
       passwordHash: crPw,
       role: 'student',
-      department: 'Software Engineering',
+      gender: 'M',
+      facultyId: facultyIds.get('Faculty of Computing')!,
+      departmentId: seDeptId,
+      program: 'Degree',
+      fieldOfStudy: 'Software Engineering',
       year: 5,
-      classSection: 'A',
+      section: 'A',
       forcePasswordChange: true,
     },
     update: {
       passwordHash: crPw,
       name: 'Class Rep',
-      department: 'Software Engineering',
+      facultyId: facultyIds.get('Faculty of Computing')!,
+      departmentId: seDeptId,
       year: 5,
-      classSection: 'A',
+      section: 'A',
       forcePasswordChange: true,
     },
   });
@@ -108,10 +176,10 @@ async function main() {
     create: {
       id: '00000000-0000-0000-0000-0000000000c1',
       userId: cr.id,
-      semesterId: sem.id,
-      department: 'Software Engineering',
+      academicYearId: ay.id,
+      departmentId: seDeptId,
       year: 5,
-      classSection: 'A',
+      section: 'A',
     },
     update: {},
   });
@@ -151,9 +219,16 @@ async function main() {
         buildingId: gion.id,
         floorIndex: r.floor,
         capacity: r.cap,
+        roomType: 'lecture_hall',
+        hasProjector: true,
+        hasInternet: true,
+        hasPower: true,
         equipmentJson: JSON.stringify(['Internet', 'Projector']),
       },
-      update: {},
+      update: {
+        hasProjector: true,
+        hasInternet: true,
+      },
     });
   }
 
@@ -162,12 +237,21 @@ async function main() {
     create: {
       id: '00000000-0000-0000-0000-00000000c01',
       courseName: 'Database Systems',
-      department: 'Software Engineering',
+      courseCode: 'CS401',
+    },
+    update: {},
+  });
+
+  const offering = await prisma.courseOffering.upsert({
+    where: { id: '00000000-0000-0000-0000-00000000o01' },
+    create: {
+      id: '00000000-0000-0000-0000-00000000o01',
+      courseId: course.id,
+      academicYearId: ay.id,
+      departmentId: seDeptId,
       year: 5,
-      classSection: 'A',
-      semesterId: sem.id,
+      section: 'A',
       teacherUserId: teacher.id,
-      teacherContact: '+251900000000',
       createdByCrUserId: cr.id,
     },
     update: {},
@@ -183,11 +267,8 @@ async function main() {
     create: {
       id: '00000000-0000-0000-0000-00000000bk1',
       roomId: '00000000-0000-0000-0000-00000000r201',
-      courseId: course.id,
-      teacherUserId: teacher.id,
-      department: 'Software Engineering',
-      year: 5,
-      classSection: 'A',
+      courseOfferingId: offering.id,
+      bookedByUserId: teacher.id,
       startTime: t1,
       endTime: t2,
       status: 'booked',

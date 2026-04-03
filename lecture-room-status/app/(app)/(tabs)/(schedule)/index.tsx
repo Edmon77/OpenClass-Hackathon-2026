@@ -21,7 +21,13 @@ import { SectionHeader } from '@/src/components/ui/SectionHeader';
 import { enterFromBottom, PRESS_SCALE } from '@/src/theme/motion';
 import { colors, radius, space, type, shadows } from '@/src/theme/tokens';
 
-type CourseRow = { course_name: string; teacher_name: string; department: string; year: number; class_section: string };
+type CourseRow = {
+  course_name: string;
+  teacher_name: string | null;
+  department: string;
+  year: number;
+  class_section: string;
+};
 type BookingRow = { id: string; room_number: string; building_name: string; course_name: string; start_time: string; end_time: string; next_booking_preference?: boolean };
 
 export default function ScheduleScreen() {
@@ -32,7 +38,149 @@ export default function ScheduleScreen() {
   }
 
   if (user?.role === 'student') return <StudentSchedule />;
+  if (user?.role === 'teacher') return <TeacherSchedule />;
   return <BookingsList />;
+}
+
+type OfferingRow = {
+  id: string;
+  course_name: string;
+  course_code: string | null;
+  department: string;
+  year: number;
+  class_section: string;
+};
+
+function TeacherSchedule() {
+  const { user } = useAuth();
+  const router = useRouter();
+  const [courses, setCourses] = useState<OfferingRow[]>([]);
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!user) return;
+    try {
+      const c = await apiFetch<{ courses: OfferingRow[] }>('/courses/bookable');
+      setCourses(c.courses);
+    } catch {
+      setCourses([]);
+    }
+    try {
+      const b = await apiFetch<{ bookings: BookingRow[] }>('/bookings/mine');
+      setBookings(b.bookings);
+    } catch {
+      setBookings([]);
+    }
+  }, [user]);
+
+  useFocusEffect(useCallback(() => { load().catch(() => {}); }, [load]));
+  async function onRefresh() {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }
+
+  async function cancelBooking(id: string) {
+    Alert.alert('Cancel booking?', 'The room will free up for others.', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Cancel booking',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await apiFetch(`/bookings/${id}`, { method: 'DELETE' });
+            await load();
+          } catch (e) {
+            Alert.alert('Error', String(e));
+          }
+        },
+      },
+    ]);
+  }
+
+  return (
+    <FlatList
+      style={styles.flat}
+      contentContainerStyle={styles.list}
+      data={bookings}
+      keyExtractor={(item) => item.id}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.campus} />}
+      ListHeaderComponent={
+        <View>
+          <SectionHeader title="Assigned courses" style={{ marginTop: 0 }} />
+          {courses.length === 0 ? (
+            <EmptyState
+              icon="book-outline"
+              title="No assignments"
+              subtitle="Ask admin to assign you as teacher on course offerings."
+            />
+          ) : (
+            courses.map((item, index) => (
+              <Animated.View key={item.id} entering={enterFromBottom(index)}>
+                <View style={styles.card}>
+                  <View style={styles.courseHeader}>
+                    <View style={styles.courseIcon}>
+                      <Ionicons name="book" size={18} color={colors.campus} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.courseTitle}>{item.course_name}</Text>
+                      <Text style={styles.teacher}>{item.department}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.tagRow}>
+                    <View style={styles.tag}>
+                      <Text style={styles.tagText}>Year {item.year}</Text>
+                    </View>
+                    {item.class_section ? (
+                      <View style={styles.tag}>
+                        <Text style={styles.tagText}>{item.class_section}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </Animated.View>
+            ))
+          )}
+          <Pressable
+            style={styles.exploreBtn}
+            onPress={() => router.push('/(app)/(tabs)/(explore)')}
+          >
+            <Ionicons name="map-outline" size={20} color={colors.campus} />
+            <Text style={styles.exploreBtnTxt}>Book a room</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.tertiaryLabel} />
+          </Pressable>
+          <SectionHeader title="My bookings" />
+        </View>
+      }
+      renderItem={({ item, index }) => (
+        <Animated.View entering={enterFromBottom(index)}>
+          <View style={styles.card}>
+            <View style={styles.courseHeader}>
+              <View style={[styles.courseIcon, { backgroundColor: colors.accentMuted }]}>
+                <Ionicons name="calendar" size={18} color={colors.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.courseTitle}>{item.course_name}</Text>
+                <Text style={styles.teacher}>{item.building_name} · {item.room_number}</Text>
+              </View>
+            </View>
+            <Text style={styles.bookTime}>
+              {formatDateTime(item.start_time)} → {formatDateTime(item.end_time)}
+            </Text>
+            {item.next_booking_preference && (
+              <Text style={styles.pref}>Same room next slot preferred</Text>
+            )}
+            <Pressable onPress={() => cancelBooking(item.id)} style={styles.cancelBtn}>
+              <Text style={styles.cancelTxt}>Cancel booking</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+      )}
+      ListEmptyComponent={
+        <EmptyState icon="calendar-outline" title="No bookings" subtitle="Book rooms from Explore." />
+      }
+    />
+  );
 }
 
 function StudentSchedule() {
@@ -96,7 +244,7 @@ function StudentSchedule() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.courseTitle}>{item.course_name}</Text>
-                <Text style={styles.teacher}>{item.teacher_name}</Text>
+                <Text style={styles.teacher}>{item.teacher_name ?? 'TBA'}</Text>
               </View>
             </View>
             <View style={styles.tagRow}>
@@ -114,7 +262,7 @@ function StudentSchedule() {
         </Animated.View>
       )}
       ListEmptyComponent={
-        <EmptyState icon="book-outline" title="No courses yet" subtitle="Your class rep may still be adding courses for this semester." />
+        <EmptyState icon="book-outline" title="No courses yet" subtitle="Your class rep may still be adding courses for this academic year." />
       }
     />
   );
@@ -217,4 +365,15 @@ const styles = StyleSheet.create({
   },
   groupedRowLabel: { ...type.body, color: colors.label, flex: 1 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.separator, marginLeft: space.lg + 20 + space.sm },
+  exploreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: colors.systemBackground,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    marginBottom: space.lg,
+    ...shadows.card,
+  },
+  exploreBtnTxt: { ...type.headline, color: colors.campus, flex: 1 },
 });

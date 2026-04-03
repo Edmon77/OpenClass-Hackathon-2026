@@ -7,12 +7,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Pressable,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/src/context/AuthContext';
-import { getApiBaseUrl } from '@/src/api/config';
+import { getApiBaseUrl, isApiConfigured } from '@/src/api/config';
+import { testApiConnectionSummary } from '@/src/api/connection';
 import { PrimaryButton } from '@/src/components/ui/PrimaryButton';
 import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
@@ -22,6 +24,22 @@ export default function LoginScreen() {
   const [id, setId] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  async function onTestConnection() {
+    const base = getApiBaseUrl();
+    if (!base) {
+      Alert.alert('API URL', 'Set EXPO_PUBLIC_API_URL in lecture-room-status/.env and restart Expo.');
+      return;
+    }
+    setTesting(true);
+    try {
+      const r = await testApiConnectionSummary(base);
+      Alert.alert(r.ok ? 'Connection OK' : 'Cannot reach API', r.text);
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function onSubmit() {
     setBusy(true);
@@ -56,9 +74,21 @@ export default function LoginScreen() {
         <Animated.View entering={FadeInDown.delay(200).duration(500)}>
           <Text style={styles.hint}>University ID and password</Text>
           {!!getApiBaseUrl() && (
-            <Text style={styles.apiUrl} selectable numberOfLines={2}>
-              {getApiBaseUrl()}
-            </Text>
+            <>
+              <Text style={styles.apiUrl} selectable numberOfLines={2}>
+                {getApiBaseUrl()}
+              </Text>
+              {Platform.OS !== 'web' && /localhost|127\.0\.0\.1/i.test(getApiBaseUrl()) && (
+                <Text style={styles.warn}>
+                  localhost here points at this device, not your PC. Use your computer&apos;s LAN IP (e.g. same as Metro: 192.168.x.x) plus :3000. Android emulator: 10.0.2.2:3000.
+                </Text>
+              )}
+              {isApiConfigured() && (
+                <Pressable onPress={onTestConnection} disabled={testing} style={({ pressed }) => [styles.testBtn, pressed && { opacity: 0.7 }]}>
+                  <Text style={styles.testBtnTxt}>{testing ? 'Testing…' : 'Test API connection'}</Text>
+                </Pressable>
+              )}
+            </>
           )}
           <View style={styles.inputGroup}>
             <View style={styles.inputRow}>
@@ -123,7 +153,15 @@ const styles = StyleSheet.create({
   title: { ...type.title1, color: colors.label },
   tagline: { ...type.subhead, color: colors.secondaryLabel, marginTop: space.xs },
   hint: { ...type.subhead, color: colors.secondaryLabel, marginBottom: space.md },
-  apiUrl: { ...type.caption2, color: colors.tertiaryLabel, marginBottom: space.md },
+  apiUrl: { ...type.caption2, color: colors.tertiaryLabel, marginBottom: space.sm },
+  warn: {
+    ...type.caption2,
+    color: colors.destructive,
+    marginBottom: space.md,
+    lineHeight: 18,
+  },
+  testBtn: { alignSelf: 'flex-start', marginBottom: space.md, paddingVertical: space.xs },
+  testBtnTxt: { ...type.subhead, color: colors.campus, fontWeight: '600' },
   inputGroup: {
     backgroundColor: colors.systemBackground,
     borderRadius: radius.lg,

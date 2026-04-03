@@ -45,16 +45,16 @@ export default function SemestersScreen() {
     if (!semName.trim()) { Alert.alert('Missing', 'Enter semester name and dates.'); return; }
     try {
       await apiFetch('/admin/semesters', { method: 'POST', json: { name: semName.trim(), startDate: semStart.trim(), endDate: semEnd.trim() } });
-      setSemName(''); await load(); Alert.alert('Created', 'Semester added.');
+      setSemName(''); await load(); Alert.alert('Created', 'Academic year added.');
     } catch (e) { Alert.alert('Error', String(e)); }
   }
 
   async function activateSemester(id: string) {
-    try { await apiFetch(`/admin/semesters/${id}/activate`, { method: 'POST' }); await load(); Alert.alert('OK', 'Active semester updated.'); } catch (e) { Alert.alert('Error', String(e)); }
+    try { await apiFetch(`/admin/semesters/${id}/activate`, { method: 'POST' }); await load(); Alert.alert('OK', 'Active academic year updated.'); } catch (e) { Alert.alert('Error', String(e)); }
   }
 
   function closeSemester(id: string) {
-    Alert.alert('Close semester?', 'Deactivates and archives.', [
+    Alert.alert('Close academic year?', 'Deactivates offerings and CR assignments tied to this year.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Close', style: 'destructive', onPress: async () => {
         try { await apiFetch(`/admin/semesters/${id}/close`, { method: 'POST' }); await load(); Alert.alert('Closed', 'Archived.'); } catch (e) { Alert.alert('Error', String(e)); }
@@ -66,20 +66,20 @@ export default function SemestersScreen() {
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.campus} />}>
       <Pressable style={styles.actionChip} onPress={() => setShowForm(!showForm)}>
         <Ionicons name={showForm ? 'close' : 'add-circle'} size={18} color={colors.accent} />
-        <Text style={styles.actionText}>{showForm ? 'Close' : 'New semester'}</Text>
+        <Text style={styles.actionText}>{showForm ? 'Close' : 'New academic year'}</Text>
       </Pressable>
 
       {showForm && (
         <GroupedCard style={{ padding: space.lg, marginVertical: space.md }}>
-          <Text style={styles.formTitle}>Create semester</Text>
-          <TextInput style={styles.input} placeholder="Name (e.g. 2026 Semester 1)" value={semName} onChangeText={setSemName} placeholderTextColor={colors.tertiaryLabel} />
+          <Text style={styles.formTitle}>Create academic year</Text>
+          <TextInput style={styles.input} placeholder="Name (e.g. 2025/26)" value={semName} onChangeText={setSemName} placeholderTextColor={colors.tertiaryLabel} />
           <TextInput style={styles.input} placeholder="Start YYYY-MM-DD" value={semStart} onChangeText={setSemStart} autoCapitalize="none" placeholderTextColor={colors.tertiaryLabel} />
           <TextInput style={styles.input} placeholder="End YYYY-MM-DD" value={semEnd} onChangeText={setSemEnd} autoCapitalize="none" placeholderTextColor={colors.tertiaryLabel} />
-          <PrimaryButton title="Create semester" onPress={createSemester} />
+          <PrimaryButton title="Create academic year" onPress={createSemester} />
         </GroupedCard>
       )}
 
-      <SectionHeader title={`Semesters (${semesters.length})`} style={{ marginTop: space.md }} />
+      <SectionHeader title={`Academic years (${semesters.length})`} style={{ marginTop: space.md }} />
       {semesters.map((s, i) => (
         <Animated.View key={s.id} entering={enterFromBottom(i)}>
           <View style={styles.card}>

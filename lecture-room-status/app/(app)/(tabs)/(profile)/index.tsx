@@ -69,7 +69,7 @@ export default function ProfileScreen() {
         </View>
         {user.department && (
           <Text style={styles.userMeta}>
-            {user.department}{user.year ? ` · Year ${user.year}` : ''}{user.class_section ? ` · ${user.class_section}` : ''}
+            {user.department}{user.year ? ` · Year ${user.year}` : ''}{(user.section ?? user.class_section) ? ` · Section ${user.section ?? user.class_section}` : ''}
           </Text>
         )}
       </Animated.View>

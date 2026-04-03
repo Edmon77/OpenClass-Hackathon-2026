@@ -42,6 +42,9 @@ yarn-error.*
 /ios
 /android
 
+# Local reference spreadsheets / docs (not for GitHub)
+system building assets /
+
 # Internal docs / plans (not for GitHub)
 REACT_NATIVE_IMPLEMENTATION_PLAN.md
 LECTURE_ROOM_STATUS_SYSTEM_DOCUMENTATION.md
