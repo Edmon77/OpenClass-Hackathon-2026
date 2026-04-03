@@ -3,10 +3,24 @@ import { z } from 'zod';
 import { AlertSubscriptionStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 
-const subscribeBody = z.object({
-  roomId: z.string().uuid(),
-  notifyBeforeMinutes: z.number().int().min(1).max(120).optional(),
-});
+const subscribeBody = z.preprocess(
+  (val) => {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const o = val as Record<string, unknown>;
+      const rid = o.roomId ?? o.room_id;
+      const nbm = o.notifyBeforeMinutes ?? o.notify_before_minutes;
+      return {
+        roomId: Array.isArray(rid) ? rid[0] : rid,
+        notifyBeforeMinutes: nbm,
+      };
+    }
+    return val;
+  },
+  z.object({
+    roomId: z.string().uuid(),
+    notifyBeforeMinutes: z.coerce.number().int().min(1).max(120).optional(),
+  })
+);
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 

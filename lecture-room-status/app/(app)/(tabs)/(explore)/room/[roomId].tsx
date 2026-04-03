@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -67,7 +67,11 @@ function heroConfig(ui: 'green' | 'yellow' | 'red') {
 }
 
 export default function RoomDetailScreen() {
-  const { roomId } = useLocalSearchParams<{ roomId: string }>();
+  const rawRoomId = useLocalSearchParams<{ roomId: string | string[] }>().roomId;
+  const roomId = useMemo(
+    () => (Array.isArray(rawRoomId) ? rawRoomId[0] : rawRoomId) as string | undefined,
+    [rawRoomId]
+  );
   const router = useRouter();
   const { user } = useAuth();
   const { cutoffMinutes } = usePolicy();

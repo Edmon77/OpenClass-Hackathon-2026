@@ -12,8 +12,9 @@ const CR_EVENT_TYPES: readonly string[] = ['lecture', 'presentation', 'lab'];
 const createBody = z.object({
   roomId: z.string().uuid(),
   courseId: z.string().uuid(),
-  startTime: z.string().datetime(),
-  endTime: z.string().datetime(),
+  // ISO strings from JS include ms (e.g. .000Z); zod datetime() rejects them without precision
+  startTime: z.string().datetime({ precision: 3 }),
+  endTime: z.string().datetime({ precision: 3 }),
   eventType: z.enum(EVENT_TYPES).optional(),
   nextBookingPreference: z.boolean().optional(),
 });
