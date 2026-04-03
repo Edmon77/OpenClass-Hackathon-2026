@@ -23,32 +23,34 @@ export type ApiError = { error: string; code?: string };
 
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit & { json?: unknown } = {}
+  options: RequestInit & { json?: unknown; timeoutMs?: number } = {}
 ): Promise<T> {
   const base = getApiBaseUrl();
   if (!base) throw new Error('EXPO_PUBLIC_API_URL is not set');
 
+  const { timeoutMs = 15_000, json, ...fetchOptions } = options;
+
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    ...(options.headers as Record<string, string>),
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
   const token = await getStoredToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let body: string | undefined;
-  if (options.json !== undefined) {
+  if (json !== undefined) {
     headers['Content-Type'] = 'application/json';
-    body = JSON.stringify(options.json);
+    body = JSON.stringify(json);
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const res = await fetch(`${base}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
-    body: body ?? options.body,
-    signal: options.signal ?? controller.signal,
+    body: body ?? fetchOptions.body,
+    signal: fetchOptions.signal ?? controller.signal,
   });
   clearTimeout(timer);
 
@@ -61,8 +63,14 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
-    const err = data as ApiError;
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const err = data as ApiError & { message?: string; statusCode?: number };
+    const detail =
+      typeof err.message === 'string' && err.message.length > 0
+        ? err.error && err.error !== err.message
+          ? `${err.error}: ${err.message}`
+          : err.message
+        : err.error || `HTTP ${res.status}`;
+    throw new Error(detail);
   }
 
   return data as T;

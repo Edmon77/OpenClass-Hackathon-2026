@@ -56,6 +56,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="(assistant)"
+        options={{
+          title: 'Assistant',
+          tabBarIcon: ({ color, size }) => (
+            <TabBarIcon name="chatbubble-ellipses-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="(notifications)"
         options={{
           title: 'Alerts',

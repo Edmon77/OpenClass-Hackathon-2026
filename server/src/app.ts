@@ -12,6 +12,7 @@ import { notificationsRoutes } from './routes/notifications.js';
 import { settingsRoutes } from './routes/settings.js';
 import { roomAlertsRoutes } from './routes/roomAlerts.js';
 import { structureRoutes } from './routes/structure.js';
+import { aiRoutes } from './routes/ai.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -59,6 +60,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(settingsRoutes, { prefix: '/settings' });
   await app.register(roomAlertsRoutes, { prefix: '/room-alerts' });
   await app.register(structureRoutes, { prefix: '/structure' });
+  await app.register(aiRoutes, { prefix: '/ai' });
 
   return app;
 }
