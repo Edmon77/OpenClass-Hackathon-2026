@@ -27,11 +27,12 @@ type CourseRow = {
   id: string;
   course_name: string;
   course_code: string | null;
+  faculty_name: string;
   department: string;
   year: number;
   class_section: string;
-  teacher_name: string;
-  teacher_student_id: string;
+  teacher_name: string | null;
+  teacher_student_id: string | null;
   semester_name: string;
   is_active: boolean;
 };
@@ -46,20 +47,20 @@ export default function AdminCoursesScreen() {
   const [cName, setCName] = useState('');
   const [cCode, setCCode] = useState('');
   const [cTeacher, setCTeacher] = useState('');
-  const [cDept, setCDept] = useState('');
+  const [cFaculty, setCFaculty] = useState('Faculty of Computing');
+  const [cDept, setCDept] = useState('Software Engineering');
   const [cYear, setCYear] = useState('');
   const [cClass, setCClass] = useState('');
-  const [cContact, setCContact] = useState('');
   const [bulkText, setBulkText] = useState('');
 
   const [editCourse, setEditCourse] = useState<CourseRow | null>(null);
   const [eName, setEName] = useState('');
   const [eCode, setECode] = useState('');
   const [eTeacher, setETeacher] = useState('');
+  const [eFaculty, setEFaculty] = useState('');
   const [eDept, setEDept] = useState('');
   const [eYear, setEYear] = useState('');
   const [eClass, setEClass] = useState('');
-  const [eContact, setEContact] = useState('');
 
   const load = useCallback(async () => {
     if (!isApiConfigured() || user?.role !== 'admin') return;
@@ -72,16 +73,24 @@ export default function AdminCoursesScreen() {
 
   async function createCourse() {
     const y = parseInt(cYear, 10);
-    if (!cName.trim() || !cTeacher.trim() || !cDept.trim() || !Number.isFinite(y) || !cClass.trim()) {
-      Alert.alert('Missing', 'Course name, teacher ID, department, year, and class are required.'); return;
+    if (!cName.trim() || !cDept.trim() || !Number.isFinite(y)) {
+      Alert.alert('Missing', 'Course name, faculty, department, and year are required.'); return;
     }
     try {
       await apiFetch('/admin/courses', {
         method: 'POST',
-        json: { courseName: cName.trim(), courseCode: cCode.trim() || undefined, teacherStudentId: cTeacher.trim().toUpperCase(), department: cDept.trim(), year: y, classSection: cClass.trim(), teacherContact: cContact.trim() || undefined },
+        json: {
+          courseName: cName.trim(),
+          courseCode: cCode.trim() || undefined,
+          teacherStudentId: cTeacher.trim() ? cTeacher.trim().toUpperCase() : undefined,
+          faculty: cFaculty.trim(),
+          department: cDept.trim(),
+          year: y,
+          classSection: cClass.trim() || undefined,
+        },
       });
-      setCName(''); setCCode(''); setCTeacher(''); setCDept(''); setCYear(''); setCClass(''); setCContact('');
-      await load(); Alert.alert('Created', 'Course added.');
+      setCName(''); setCCode(''); setCTeacher(''); setCDept(''); setCYear(''); setCClass('');
+      await load(); Alert.alert('Created', 'Course offering added.');
     } catch (e) { Alert.alert('Error', String(e)); }
   }
 
@@ -89,11 +98,11 @@ export default function AdminCoursesScreen() {
     setEditCourse(c);
     setEName(c.course_name);
     setECode(c.course_code ?? '');
-    setETeacher(c.teacher_student_id);
+    setETeacher(c.teacher_student_id ?? '');
+    setEFaculty(c.faculty_name || 'Faculty of Computing');
     setEDept(c.department);
     setEYear(String(c.year));
     setEClass(c.class_section);
-    setEContact('');
   }
 
   async function saveEdit() {
@@ -105,11 +114,11 @@ export default function AdminCoursesScreen() {
         json: {
           courseName: eName.trim() || undefined,
           courseCode: eCode.trim() || undefined,
-          teacherStudentId: eTeacher.trim().toUpperCase() || undefined,
+          teacherStudentId: eTeacher.trim() ? eTeacher.trim().toUpperCase() : '',
+          faculty: eFaculty.trim() || undefined,
           department: eDept.trim() || undefined,
           year: Number.isFinite(y) ? y : undefined,
           classSection: eClass.trim() || undefined,
-          teacherContact: eContact.trim() || undefined,
         },
       });
       setEditCourse(null); await load();
@@ -131,15 +140,23 @@ export default function AdminCoursesScreen() {
     if (!lines.length) return [];
     const head = lines[0].toLowerCase();
     const start = head.includes('course_name') || head.includes('coursename') ? 1 : 0;
-    const out: { courseName: string; courseCode?: string; teacherStudentId: string; department: string; year: number; classSection: string; teacherContact?: string }[] = [];
+    const out: {
+      courseName: string;
+      courseCode?: string;
+      teacherStudentId?: string;
+      faculty: string;
+      department: string;
+      year: number;
+      classSection?: string;
+    }[] = [];
     for (let i = start; i < lines.length; i++) {
       const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
       if (cols.length < 5) continue;
-      const [courseName, teacherStudentId, department, yearStr, classSection, teacherContact, courseCode] = cols;
+      const [courseName, faculty, department, yearStr, classSection, teacherStudentId, courseCode] = cols;
       const year = parseInt(yearStr, 10);
       if (!Number.isFinite(year)) continue;
-      const row: (typeof out)[number] = { courseName, teacherStudentId, department, year, classSection };
-      if (teacherContact) row.teacherContact = teacherContact;
+      const row: (typeof out)[number] = { courseName, faculty, department, year, classSection: classSection || '' };
+      if (teacherStudentId) row.teacherStudentId = teacherStudentId;
       if (courseCode) row.courseCode = courseCode;
       out.push(row);
     }
@@ -148,7 +165,7 @@ export default function AdminCoursesScreen() {
 
   async function importBulk() {
     const parsed = parseCourseCsv(bulkText);
-    if (!parsed.length) { Alert.alert('Empty', 'Paste CSV: course_name,teacher_id,department,year,class[,contact,code]'); return; }
+    if (!parsed.length) { Alert.alert('Empty', 'Paste CSV: course_name,faculty,department,year,section[,teacher_id,code]'); return; }
     try {
       const r = await apiFetch<{ created: number; skipped: number }>('/admin/courses/bulk', { method: 'POST', json: { courses: parsed } });
       setBulkText(''); await load();
@@ -177,11 +194,11 @@ export default function AdminCoursesScreen() {
             <Text style={styles.formTitle}>Create course</Text>
             <TextInput style={styles.input} placeholder="Course name" value={cName} onChangeText={setCName} placeholderTextColor={colors.tertiaryLabel} />
             <TextInput style={styles.input} placeholder="Course code (optional)" value={cCode} onChangeText={setCCode} placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Teacher ID (e.g. TCH001)" value={cTeacher} onChangeText={setCTeacher} autoCapitalize="characters" placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Department" value={cDept} onChangeText={setCDept} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Faculty (exact name)" value={cFaculty} onChangeText={setCFaculty} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Department (exact name)" value={cDept} onChangeText={setCDept} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Teacher ID (optional)" value={cTeacher} onChangeText={setCTeacher} autoCapitalize="characters" placeholderTextColor={colors.tertiaryLabel} />
             <TextInput style={styles.input} placeholder="Year" value={cYear} onChangeText={setCYear} keyboardType="number-pad" placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Class section" value={cClass} onChangeText={setCClass} placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Teacher contact (optional)" value={cContact} onChangeText={setCContact} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Section A,B,... (optional)" value={cClass} onChangeText={setCClass} placeholderTextColor={colors.tertiaryLabel} />
             <PrimaryButton title="Create course" onPress={createCourse} />
           </GroupedCard>
         )}
@@ -189,8 +206,8 @@ export default function AdminCoursesScreen() {
         {showBulk && (
           <GroupedCard style={{ marginBottom: space.lg, padding: space.lg }}>
             <Text style={styles.formTitle}>Bulk import (CSV)</Text>
-            <Text style={styles.hint}>course_name,teacher_id,department,year,class[,contact,code]</Text>
-            <TextInput style={[styles.input, styles.bulkInput]} placeholder="Database Systems,TCH001,SE,5,A,,CS401" value={bulkText} onChangeText={setBulkText} multiline placeholderTextColor={colors.tertiaryLabel} />
+            <Text style={styles.hint}>course_name,faculty,department,year,section[,teacher_id,code]</Text>
+            <TextInput style={[styles.input, styles.bulkInput]} placeholder="Database Systems,Faculty of Computing,Software Engineering,5,A,TCH001,CS401" value={bulkText} onChangeText={setBulkText} multiline placeholderTextColor={colors.tertiaryLabel} />
             <PrimaryButton title="Import courses" onPress={importBulk} />
           </GroupedCard>
         )}
@@ -208,7 +225,7 @@ export default function AdminCoursesScreen() {
                   <Text style={styles.cardTitle}>{c.course_name}</Text>
                   {!c.is_active && <View style={styles.inactiveBadge}><Text style={styles.inactiveBadgeText}>Inactive</Text></View>}
                 </View>
-                <Text style={styles.cardSub}>{c.teacher_name} ({c.teacher_student_id})</Text>
+                <Text style={styles.cardSub}>{c.teacher_name ? `${c.teacher_name} (${c.teacher_student_id})` : 'No teacher assigned'}</Text>
                 <Text style={styles.cardMeta}>{c.department} · Year {c.year} · {c.class_section} · {c.semester_name}</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.tertiaryLabel} />
@@ -227,11 +244,11 @@ export default function AdminCoursesScreen() {
             <Text style={styles.modalTitle}>Edit course</Text>
             <TextInput style={styles.input} placeholder="Course name" value={eName} onChangeText={setEName} placeholderTextColor={colors.tertiaryLabel} />
             <TextInput style={styles.input} placeholder="Course code" value={eCode} onChangeText={setECode} placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Teacher ID" value={eTeacher} onChangeText={setETeacher} autoCapitalize="characters" placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Faculty" value={eFaculty} onChangeText={setEFaculty} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Teacher ID (empty to clear)" value={eTeacher} onChangeText={setETeacher} autoCapitalize="characters" placeholderTextColor={colors.tertiaryLabel} />
             <TextInput style={styles.input} placeholder="Department" value={eDept} onChangeText={setEDept} placeholderTextColor={colors.tertiaryLabel} />
             <TextInput style={styles.input} placeholder="Year" value={eYear} onChangeText={setEYear} keyboardType="number-pad" placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Class section" value={eClass} onChangeText={setEClass} placeholderTextColor={colors.tertiaryLabel} />
-            <TextInput style={styles.input} placeholder="Teacher contact" value={eContact} onChangeText={setEContact} placeholderTextColor={colors.tertiaryLabel} />
+            <TextInput style={styles.input} placeholder="Section" value={eClass} onChangeText={setEClass} placeholderTextColor={colors.tertiaryLabel} />
             <View style={styles.modalActions}>
               <Pressable onPress={() => setEditCourse(null)}>
                 <Text style={styles.cancelLink}>Cancel</Text>

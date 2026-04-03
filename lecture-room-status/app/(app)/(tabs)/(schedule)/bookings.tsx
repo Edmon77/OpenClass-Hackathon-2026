@@ -24,6 +24,8 @@ type Bk = {
   room_number: string;
   building_name: string;
   course_name: string;
+  course_offering_id?: string;
+  course_id?: string;
   event_type?: string;
   start_time: string;
   end_time: string;

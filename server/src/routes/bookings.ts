@@ -11,8 +11,7 @@ const CR_EVENT_TYPES: readonly string[] = ['lecture', 'presentation', 'lab'];
 
 const createBody = z.object({
   roomId: z.string().uuid(),
-  courseId: z.string().uuid(),
-  // ISO strings from JS include ms (e.g. .000Z); zod datetime() rejects them without precision
+  courseOfferingId: z.string().uuid(),
   startTime: z.string().datetime({ precision: 3 }),
   endTime: z.string().datetime({ precision: 3 }),
   eventType: z.enum(EVENT_TYPES).optional(),
@@ -34,36 +33,88 @@ async function assertNoOverlap(roomId: string, start: Date, end: Date, excludeId
   }
 }
 
+async function crMatchesOffering(
+  userId: string,
+  offering: { departmentId: string; year: number; section: string | null; academicYearId: string }
+) {
+  return prisma.crAssignment.findFirst({
+    where: {
+      userId,
+      academicYearId: offering.academicYearId,
+      isActive: true,
+      departmentId: offering.departmentId,
+      year: offering.year,
+      section: offering.section,
+    },
+  });
+}
+
 export const bookingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/mine', { preHandler: [app.authenticate] }, async (request, reply) => {
     const userId = (request.user as { sub: string }).sub;
     const role = (request.user as { role: string }).role;
 
-    const where: {
-      status: typeof BookingStatus.booked;
-      teacherUserId?: string;
-      crUserId?: string;
-    } = { status: BookingStatus.booked };
-
+    let list;
     if (role === 'admin') {
-      // no scope filter
+      list = await prisma.booking.findMany({
+        where: { status: BookingStatus.booked },
+        orderBy: { startTime: 'asc' },
+        include: {
+          courseOffering: { include: { course: { select: { courseName: true } } } },
+          room: { include: { building: { select: { name: true } } } },
+        },
+        take: 200,
+      });
     } else if (role === 'teacher') {
-      where.teacherUserId = userId;
+      list = await prisma.booking.findMany({
+        where: {
+          status: BookingStatus.booked,
+          courseOffering: { teacherUserId: userId },
+        },
+        orderBy: { startTime: 'asc' },
+        include: {
+          courseOffering: { include: { course: { select: { courseName: true } } } },
+          room: { include: { building: { select: { name: true } } } },
+        },
+        take: 200,
+      });
     } else if (role === 'student') {
-      where.crUserId = userId;
+      const ay = await prisma.academicYear.findFirst({ where: { isActive: true } });
+      if (!ay) return { bookings: [] };
+
+      const cr = await prisma.crAssignment.findFirst({
+        where: { userId, academicYearId: ay.id, isActive: true },
+      });
+
+      list = await prisma.booking.findMany({
+        where: {
+          status: BookingStatus.booked,
+          OR: [
+            { bookedByUserId: userId },
+            ...(cr
+              ? [
+                  {
+                    courseOffering: {
+                      academicYearId: ay.id,
+                      departmentId: cr.departmentId,
+                      year: cr.year,
+                      section: cr.section,
+                    },
+                  },
+                ]
+              : []),
+          ],
+        },
+        orderBy: { startTime: 'asc' },
+        include: {
+          courseOffering: { include: { course: { select: { courseName: true } } } },
+          room: { include: { building: { select: { name: true } } } },
+        },
+        take: 200,
+      });
     } else {
       return reply.status(403).send({ error: 'Forbidden' });
     }
-
-    const list = await prisma.booking.findMany({
-      where: role === 'admin' ? { status: BookingStatus.booked } : where,
-      orderBy: { startTime: 'asc' },
-      include: {
-        course: { select: { courseName: true } },
-        room: { include: { building: { select: { name: true } } } },
-      },
-      take: 200,
-    });
 
     return {
       bookings: list.map((b) => ({
@@ -71,8 +122,9 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
         room_id: b.roomId,
         room_number: b.room.roomNumber,
         building_name: b.room.building.name,
-        course_id: b.courseId,
-        course_name: b.course.courseName,
+        course_offering_id: b.courseOfferingId,
+        course_id: b.courseOffering.courseId,
+        course_name: b.courseOffering.course.courseName,
         event_type: b.eventType,
         start_time: b.startTime.toISOString(),
         end_time: b.endTime.toISOString(),
@@ -92,32 +144,26 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
     const end = new Date(parsed.data.endTime);
     if (end <= start) return reply.status(400).send({ error: 'endTime must be after startTime' });
 
-    const course = await prisma.course.findFirst({
-      where: { id: parsed.data.courseId, isActive: true },
-      include: { semester: true },
+    const offering = await prisma.courseOffering.findFirst({
+      where: { id: parsed.data.courseOfferingId, isActive: true },
+      include: { academicYear: true },
     });
-    if (!course) return reply.status(404).send({ error: 'Course not found' });
+    if (!offering) return reply.status(404).send({ error: 'Course offering not found' });
+    if (!offering.academicYear.isActive) {
+      return reply.status(400).send({ error: 'Academic year is not active' });
+    }
 
     const eventType = (parsed.data.eventType ?? 'lecture') as EventType;
 
     if (role === 'teacher') {
-      if (course.teacherUserId !== userId) {
-        return reply.status(403).send({ error: 'Not your course' });
+      if (!offering.teacherUserId || offering.teacherUserId !== userId) {
+        return reply.status(403).send({ error: 'Not assigned to this course offering' });
       }
       if (!TEACHER_EVENT_TYPES.includes(eventType)) {
         return reply.status(403).send({ error: `Teachers cannot create "${eventType}" events. Allowed: ${TEACHER_EVENT_TYPES.join(', ')}` });
       }
     } else if (role === 'student') {
-      const cr = await prisma.crAssignment.findFirst({
-        where: {
-          userId,
-          semesterId: course.semesterId,
-          isActive: true,
-          department: course.department,
-          year: course.year,
-          classSection: course.classSection,
-        },
-      });
+      const cr = await crMatchesOffering(userId, offering);
       if (!cr) return reply.status(403).send({ error: 'CR scope required' });
       if (!CR_EVENT_TYPES.includes(eventType)) {
         return reply.status(403).send({ error: `CRs cannot create "${eventType}" events. Allowed: ${CR_EVENT_TYPES.join(', ')}` });
@@ -138,12 +184,8 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
     const booking = await prisma.booking.create({
       data: {
         roomId: parsed.data.roomId,
-        courseId: parsed.data.courseId,
-        teacherUserId: course.teacherUserId,
-        crUserId: role === 'student' ? userId : null,
-        department: course.department,
-        year: course.year,
-        classSection: course.classSection,
+        courseOfferingId: parsed.data.courseOfferingId,
+        bookedByUserId: userId,
         eventType,
         startTime: start,
         endTime: end,
@@ -167,54 +209,48 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.get(
-    '/room/:roomId',
-    { preHandler: [app.authenticate] },
-    async (request, reply) => {
-      const { roomId } = request.params as { roomId: string };
-      const list = await prisma.booking.findMany({
-        where: { roomId },
-        orderBy: { startTime: 'asc' },
-        include: { course: { select: { courseName: true } } },
-      });
-      return {
-        bookings: list.map((b) => ({
-          id: b.id,
-          start_time: b.startTime.toISOString(),
-          end_time: b.endTime.toISOString(),
-          status: b.status,
-          event_type: b.eventType,
-          course_id: b.courseId,
-          course_name: b.course.courseName,
-        })),
-      };
-    }
-  );
+  app.get('/room/:roomId', { preHandler: [app.authenticate] }, async (request) => {
+    const { roomId } = request.params as { roomId: string };
+    const list = await prisma.booking.findMany({
+      where: { roomId },
+      orderBy: { startTime: 'asc' },
+      include: { courseOffering: { include: { course: { select: { courseName: true } } } } },
+    });
+    return {
+      bookings: list.map((b) => ({
+        id: b.id,
+        start_time: b.startTime.toISOString(),
+        end_time: b.endTime.toISOString(),
+        status: b.status,
+        event_type: b.eventType,
+        course_offering_id: b.courseOfferingId,
+        course_id: b.courseOffering.courseId,
+        course_name: b.courseOffering.course.courseName,
+      })),
+    };
+  });
 
-  app.get(
-    '/:id',
-    { preHandler: [app.authenticate] },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const b = await prisma.booking.findUnique({
-        where: { id },
-        include: { course: true },
-      });
-      if (!b) return reply.status(404).send({ error: 'Not found' });
-      return {
-        booking: {
-          id: b.id,
-          room_id: b.roomId,
-          course_id: b.courseId,
-          event_type: b.eventType,
-          start_time: b.startTime.toISOString(),
-          end_time: b.endTime.toISOString(),
-          status: b.status,
-          course_name: b.course.courseName,
-        },
-      };
-    }
-  );
+  app.get('/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const b = await prisma.booking.findUnique({
+      where: { id },
+      include: { courseOffering: { include: { course: true } } },
+    });
+    if (!b) return reply.status(404).send({ error: 'Not found' });
+    return {
+      booking: {
+        id: b.id,
+        room_id: b.roomId,
+        course_offering_id: b.courseOfferingId,
+        course_id: b.courseOffering.courseId,
+        event_type: b.eventType,
+        start_time: b.startTime.toISOString(),
+        end_time: b.endTime.toISOString(),
+        status: b.status,
+        course_name: b.courseOffering.course.courseName,
+      },
+    };
+  });
 
   app.delete('/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -223,7 +259,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
 
     const b = await prisma.booking.findUnique({
       where: { id },
-      include: { course: true },
+      include: { courseOffering: true },
     });
     if (!b) return reply.status(404).send({ error: 'Not found' });
     if (b.status !== BookingStatus.booked) return reply.status(400).send({ error: 'Already cancelled' });
@@ -233,23 +269,14 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
       await onBookingCancelled(id).catch(() => {});
       return { ok: true };
     }
-    if (role === 'teacher' && b.course.teacherUserId === userId) {
+    if (role === 'teacher' && b.courseOffering.teacherUserId === userId) {
       await prisma.booking.update({ where: { id }, data: { status: BookingStatus.cancelled } });
       await onBookingCancelled(id).catch(() => {});
       return { ok: true };
     }
     if (role === 'student') {
-      const cr = await prisma.crAssignment.findFirst({
-        where: {
-          userId,
-          semesterId: b.course.semesterId,
-          isActive: true,
-          department: b.course.department,
-          year: b.course.year,
-          classSection: b.course.classSection,
-        },
-      });
-      if (cr) {
+      const cr = await crMatchesOffering(userId, b.courseOffering);
+      if (cr || b.bookedByUserId === userId) {
         await prisma.booking.update({ where: { id }, data: { status: BookingStatus.cancelled } });
         await onBookingCancelled(id).catch(() => {});
         return { ok: true };

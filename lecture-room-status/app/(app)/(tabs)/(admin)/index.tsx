@@ -18,11 +18,13 @@ type HubCard = {
 };
 
 const cards: HubCard[] = [
-  { title: 'Users', subtitle: 'Create, import, and manage accounts', icon: 'people', color: colors.accent, bg: colors.accentMuted, route: '/(app)/(tabs)/(admin)/users' },
-  { title: 'Buildings & Rooms', subtitle: 'Manage campus infrastructure', icon: 'business', color: colors.campus, bg: colors.campusMuted, route: '/(app)/(tabs)/(admin)/buildings-rooms' },
-  { title: 'Courses', subtitle: 'Create, import, and manage courses', icon: 'book', color: '#34C759', bg: 'rgba(52,199,89,0.12)', route: '/(app)/(tabs)/(admin)/courses' },
-  { title: 'Semesters', subtitle: 'Create, activate, and archive', icon: 'calendar', color: '#AF52DE', bg: 'rgba(175,82,222,0.12)', route: '/(app)/(tabs)/(admin)/semesters' },
-  { title: 'CR Assignments', subtitle: 'Assign class representatives', icon: 'school', color: '#FF9500', bg: 'rgba(255,149,0,0.12)', route: '/(app)/(tabs)/(admin)/cr-assignments' },
+  { title: 'Users', subtitle: 'Faculty → department → search', icon: 'people', color: colors.accent, bg: colors.accentMuted, route: '/(app)/(tabs)/(admin)/users' },
+  { title: 'Buildings & Rooms', subtitle: 'Campus infrastructure', icon: 'business', color: colors.campus, bg: colors.campusMuted, route: '/(app)/(tabs)/(admin)/buildings-rooms' },
+  { title: 'Course catalog', subtitle: 'Name + code (no offerings)', icon: 'library', color: '#34C759', bg: 'rgba(52,199,89,0.12)', route: '/(app)/(tabs)/(admin)/catalog' },
+  { title: 'Course offerings', subtitle: 'Per academic year & department', icon: 'layers', color: '#30B0C7', bg: 'rgba(48,176,199,0.12)', route: '/(app)/(tabs)/(admin)/course-offerings' },
+  { title: 'Courses', subtitle: 'Quick create (catalog + offering)', icon: 'book', color: '#34C759', bg: 'rgba(52,199,89,0.12)', route: '/(app)/(tabs)/(admin)/courses' },
+  { title: 'Academic years', subtitle: 'Create, activate, close', icon: 'calendar', color: '#AF52DE', bg: 'rgba(175,82,222,0.12)', route: '/(app)/(tabs)/(admin)/semesters' },
+  { title: 'CR Assignments', subtitle: 'Faculty → department → year → section', icon: 'school', color: '#FF9500', bg: 'rgba(255,149,0,0.12)', route: '/(app)/(tabs)/(admin)/cr-assignments' },
 ];
 
 export default function AdminHub() {

@@ -1,5 +1,3 @@
-course_name,teacher_student_id,department,year,class_section,teacher_contact,course_code
-Database Systems,TCH001,Software Engineering,5,A,+251900000000,CS401
-Software Engineering,TCH001,Software Engineering,5,A,,CS402
-Data Structures,TCH002,Software Engineering,5,B,,CS301
-Operating Systems,TCH003,Computer Science,4,A,,CS350
+course_name,course_code
+Database Systems,CS401
+Software Engineering,CS402

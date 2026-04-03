@@ -12,24 +12,40 @@ const changePwBody = z.object({
   newPassword: z.string().min(6),
 });
 
-function mapUser(u: {
-  id: string;
-  studentId: string;
-  name: string;
-  role: string;
-  department: string | null;
-  year: number | null;
-  classSection: string | null;
-  forcePasswordChange: boolean;
-}) {
+function mapUser(
+  u: {
+    id: string;
+    studentId: string;
+    name: string;
+    role: string;
+    gender: string | null;
+    facultyId: string | null;
+    departmentId: string | null;
+    program: string | null;
+    fieldOfStudy: string | null;
+    admissionType: string | null;
+    year: number | null;
+    section: string | null;
+    forcePasswordChange: boolean;
+  },
+  names?: { faculty?: string | null; department?: string | null }
+) {
   return {
     id: u.id,
     student_id: u.studentId,
     name: u.name,
     role: u.role,
-    department: u.department,
+    gender: u.gender,
+    faculty_id: u.facultyId,
+    faculty_name: names?.faculty ?? null,
+    department_id: u.departmentId,
+    department: names?.department ?? null,
+    department_name: names?.department ?? null,
+    program: u.program,
+    field_of_study: u.fieldOfStudy,
+    admission_type: u.admissionType,
     year: u.year,
-    class_section: u.classSection,
+    section: u.section,
     force_password_change: u.forcePasswordChange,
   };
 }
@@ -41,6 +57,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const studentId = parsed.data.studentId.trim().toUpperCase();
     const user = await prisma.user.findFirst({
       where: { studentId, isActive: true },
+      include: { faculty: true, department: true },
     });
     if (!user) return reply.status(401).send({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
@@ -49,33 +66,28 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const token = await app.jwt.sign({ sub: user.id, role: user.role });
     return {
       accessToken: token,
-      user: mapUser(user),
+      user: mapUser(user, { faculty: user.faculty?.name, department: user.department?.name }),
     };
   });
 
-  app.get(
-    '/me',
-    { preHandler: [app.authenticate] },
-    async (request) => {
-      const sub = (request.user as { sub: string }).sub;
-      const user = await prisma.user.findUniqueOrThrow({ where: { id: sub } });
-      return { user: mapUser(user) };
-    }
-  );
+  app.get('/me', { preHandler: [app.authenticate] }, async (request) => {
+    const sub = (request.user as { sub: string }).sub;
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: sub },
+      include: { faculty: true, department: true },
+    });
+    return { user: mapUser(user, { faculty: user.faculty?.name, department: user.department?.name }) };
+  });
 
-  app.post(
-    '/change-password',
-    { preHandler: [app.authenticate] },
-    async (request, reply) => {
-      const parsed = changePwBody.safeParse(request.body);
-      if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
-      const sub = (request.user as { sub: string }).sub;
-      const hash = await bcrypt.hash(parsed.data.newPassword, 12);
-      await prisma.user.update({
-        where: { id: sub },
-        data: { passwordHash: hash, forcePasswordChange: false },
-      });
-      return { ok: true };
-    }
-  );
+  app.post('/change-password', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const parsed = changePwBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    const sub = (request.user as { sub: string }).sub;
+    const hash = await bcrypt.hash(parsed.data.newPassword, 12);
+    await prisma.user.update({
+      where: { id: sub },
+      data: { passwordHash: hash, forcePasswordChange: false },
+    });
+    return { ok: true };
+  });
 };

@@ -1,4 +1,4 @@
-import { NotificationType, BookingStatus } from '@prisma/client';
+import { NotificationType, BookingStatus, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 
 function envInt(name: string, fallback: number): number {
@@ -9,8 +9,6 @@ function envInt(name: string, fallback: number): number {
 }
 
 export const CUTOFF_MINUTES_DEFAULT = envInt('CUTOFF_MINUTES', 10);
-
-/** Hours before class start for advance reminder notification (0 = off). */
 export const ADVANCE_REMINDER_HOURS = envInt('ADVANCE_REMINDER_HOURS', 24);
 
 const TZ = 'Africa/Addis_Ababa';
@@ -26,31 +24,43 @@ function fmtLocal(d: Date): string {
   });
 }
 
+async function studentIdsForOffering(offering: {
+  departmentId: string;
+  year: number;
+  section: string | null;
+}): Promise<string[]> {
+  const where: Prisma.UserWhereInput = {
+    role: 'student',
+    isActive: true,
+    departmentId: offering.departmentId,
+    year: offering.year,
+  };
+  if (offering.section) {
+    where.section = offering.section;
+  }
+  const students = await prisma.user.findMany({ where, select: { id: true } });
+  return students.map((s) => s.id);
+}
+
 export async function createNotificationsForBooking(bookingId: string): Promise<void> {
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId, status: BookingStatus.booked },
     include: {
-      course: true,
+      courseOffering: { include: { course: true } },
       room: { include: { building: true } },
     },
   });
   if (!booking) return;
 
   const roomLabel = `${booking.room.building.name} ${booking.room.roomNumber}`;
-  const courseName = booking.course.courseName;
+  const courseName = booking.courseOffering.course.courseName;
 
-  const students = await prisma.user.findMany({
-    where: {
-      role: 'student',
-      isActive: true,
-      department: booking.course.department,
-      year: booking.course.year,
-      classSection: booking.course.classSection,
-    },
-    select: { id: true },
-  });
+  const studentIds = await studentIdsForOffering(booking.courseOffering);
+  const targetIds = new Set<string>(studentIds);
+  if (booking.courseOffering.teacherUserId) {
+    targetIds.add(booking.courseOffering.teacherUserId);
+  }
 
-  const targetIds = new Set<string>([booking.course.teacherUserId, ...students.map((s) => s.id)]);
   const now = new Date();
   const start = booking.startTime;
   const cutoff = new Date(start);
@@ -101,9 +111,7 @@ export async function createNotificationsForBooking(bookingId: string): Promise<
   }
 
   if (rows.length) {
-    await prisma.notification.createMany({
-      data: rows,
-    });
+    await prisma.notification.createMany({ data: rows });
   }
 }
 
@@ -111,7 +119,7 @@ export async function onBookingCancelled(bookingId: string): Promise<void> {
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId },
     include: {
-      course: true,
+      courseOffering: { include: { course: true } },
       room: { include: { building: true } },
     },
   });
@@ -125,24 +133,18 @@ export async function onBookingCancelled(bookingId: string): Promise<void> {
   });
 
   const roomLabel = `${booking.room.building.name} ${booking.room.roomNumber}`;
-  const students = await prisma.user.findMany({
-    where: {
-      role: 'student',
-      isActive: true,
-      department: booking.course.department,
-      year: booking.course.year,
-      classSection: booking.course.classSection,
-    },
-    select: { id: true },
-  });
-  const targetIds = new Set<string>([booking.course.teacherUserId, ...students.map((s) => s.id)]);
+  const studentIds = await studentIdsForOffering(booking.courseOffering);
+  const targetIds = new Set<string>(studentIds);
+  if (booking.courseOffering.teacherUserId) {
+    targetIds.add(booking.courseOffering.teacherUserId);
+  }
 
   await prisma.notification.createMany({
     data: [...targetIds].map((userId) => ({
       userId,
       type: NotificationType.cancelled,
       title: 'Booking cancelled',
-      message: `${booking.course.courseName} in ${roomLabel} was cancelled.`,
+      message: `${booking.courseOffering.course.courseName} in ${roomLabel} was cancelled.`,
       scheduledTime: new Date(),
       bookingId: booking.id,
     })),

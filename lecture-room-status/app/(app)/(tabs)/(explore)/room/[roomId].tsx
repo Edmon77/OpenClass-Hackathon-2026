@@ -38,7 +38,12 @@ import { enterFade, PRESS_SCALE } from '@/src/theme/motion';
 import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
 type CourseOpt = { id: string; course_name: string; department: string; year: number; class_section: string };
-type Bk = BookingRow & { course_name?: string; course_id?: string; event_type?: string };
+type Bk = BookingRow & {
+  course_name?: string;
+  course_id?: string;
+  course_offering_id?: string;
+  event_type?: string;
+};
 
 const ALL_EVENT_TYPES = ['lecture', 'exam', 'tutor', 'defense', 'lab', 'presentation'] as const;
 type EvType = (typeof ALL_EVENT_TYPES)[number];
@@ -86,7 +91,7 @@ export default function RoomDetailScreen() {
   const [courses, setCourses] = useState<CourseOpt[]>([]);
   const [canBook, setCanBook] = useState(false);
   const [modal, setModal] = useState(false);
-  const [courseId, setCourseId] = useState<string | null>(null);
+  const [courseOfferingId, setCourseOfferingId] = useState<string | null>(null);
   const [start, setStart] = useState(new Date());
   const [end, setEnd] = useState(new Date(Date.now() + 2 * 3600000));
   const [showStart, setShowStart] = useState(false);
@@ -118,7 +123,7 @@ export default function RoomDetailScreen() {
       setCanBook(list.length > 0 && (user?.role === 'teacher' || user?.role === 'student' || user?.role === 'admin'));
     } catch { setCanBook(false); }
     setCourses(list);
-    setCourseId((prev) => {
+    setCourseOfferingId((prev) => {
       if (list.length === 0) return null;
       if (prev && list.some((x) => x.id === prev)) return prev;
       return list[0].id;
@@ -160,9 +165,19 @@ export default function RoomDetailScreen() {
   }
 
   async function onCreateBooking() {
-    if (!user || !courseId) return;
+    if (!user || !courseOfferingId) return;
     try {
-      await apiFetch('/bookings', { method: 'POST', json: { roomId, courseId, eventType, startTime: start.toISOString(), endTime: end.toISOString(), nextBookingPreference: preferNextSlot } });
+      await apiFetch('/bookings', {
+        method: 'POST',
+        json: {
+          roomId,
+          courseOfferingId,
+          eventType,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          nextBookingPreference: preferNextSlot,
+        },
+      });
       setModal(false);
       await load();
       Alert.alert('Booked', 'Room booking saved.');
@@ -176,8 +191,9 @@ export default function RoomDetailScreen() {
   function canCancelBooking(row: Bk): boolean {
     if (!user) return false;
     if (user.role === 'admin') return true;
-    if (!row.course_id) return false;
-    return courses.some((c) => c.id === row.course_id);
+    const oid = row.course_offering_id;
+    if (!oid) return false;
+    return courses.some((c) => c.id === oid);
   }
 
   async function subscribeRoomAlert() {
@@ -344,8 +360,8 @@ export default function RoomDetailScreen() {
 
             <SectionHeader title="Course" style={{ marginTop: space.sm }} />
             {courses.map((c) => (
-              <Pressable key={c.id} onPress={() => setCourseId(c.id)} style={[styles.courseOpt, courseId === c.id && styles.courseOptOn]}>
-                <Text style={[styles.courseOptText, courseId === c.id && { color: colors.campus }]}>{c.course_name}</Text>
+              <Pressable key={c.id} onPress={() => setCourseOfferingId(c.id)} style={[styles.courseOpt, courseOfferingId === c.id && styles.courseOptOn]}>
+                <Text style={[styles.courseOptText, courseOfferingId === c.id && { color: colors.campus }]}>{c.course_name}</Text>
               </Pressable>
             ))}
 

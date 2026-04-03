@@ -1,15 +1,26 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { apiFetch, getStoredToken, setStoredToken } from '../api/client';
 import { isApiConfigured } from '../api/config';
+import { probeApiHealth, unreachableApiMessage } from '../api/connection';
 
 export type AuthUser = {
   id: string;
   student_id: string;
   name: string;
   role: 'student' | 'teacher' | 'admin';
+  /** Department display name */
   department: string | null;
+  faculty_name?: string | null;
+  faculty_id?: string | null;
+  department_id?: string | null;
+  program?: string | null;
+  field_of_study?: string | null;
+  admission_type?: string | null;
+  gender?: string | null;
   year: number | null;
-  class_section: string | null;
+  section?: string | null;
+  /** @deprecated use section */
+  class_section?: string | null;
   force_password_change: boolean;
 };
 
@@ -68,8 +79,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!apiConfigured) return { ok: false, error: 'API not configured (set EXPO_PUBLIC_API_URL)' };
       try {
         const base = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
+        const probe = await probeApiHealth(base);
+        if (!probe.ok) {
+          return { ok: false, error: unreachableApiMessage(base, probe) };
+        }
+
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10_000);
+        const timer = setTimeout(() => controller.abort(), 25_000);
         const res = await fetch(`${base}/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -77,25 +93,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           signal: controller.signal,
         });
         clearTimeout(timer);
-        const data = (await res.json()) as
-          | { accessToken: string; user: AuthUser }
-          | { error: string };
-        if (!res.ok) {
-          return { ok: false, error: 'error' in data ? data.error : 'Login failed' };
+        const text = await res.text();
+        let data: { accessToken?: string; user?: AuthUser; error?: string };
+        try {
+          data = text ? (JSON.parse(text) as typeof data) : {};
+        } catch {
+          return {
+            ok: false,
+            error: `Login HTTP ${res.status}: not JSON. Is EXPO_PUBLIC_API_URL pointing at the API? First chars: ${text.slice(0, 80)}`,
+          };
         }
-        if (!('accessToken' in data)) return { ok: false, error: 'Invalid response' };
+        if (!res.ok) {
+          return { ok: false, error: data.error ?? 'Login failed' };
+        }
+        if (!data.accessToken || !data.user) return { ok: false, error: 'Invalid response (no token)' };
         await setStoredToken(data.accessToken);
         setUser(data.user);
-        return { ok: true, forcePasswordChange: data.user.force_password_change };
+        return { ok: true, forcePasswordChange: !!data.user.force_password_change };
       } catch (e: unknown) {
         const msg = String(e);
-        if (e instanceof DOMException && e.name === 'AbortError') {
+        // RN/Hermes has no global DOMException — never use `instanceof DOMException` here.
+        const name = e && typeof e === 'object' && 'name' in e ? String((e as { name: string }).name) : '';
+        const isOurTimeout = name === 'AbortError' || msg.includes('AbortError');
+        if (isOurTimeout) {
           return {
             ok: false,
             error:
-              'Request timed out after 10 s. Check that the API is running and EXPO_PUBLIC_API_URL points to a reachable address (currently: ' +
-              (process.env.EXPO_PUBLIC_API_URL ?? 'unset') +
-              ').',
+              'Login request timed out after 25 s. The API responded to /health but /auth/login did not finish — check server logs and database. API URL: ' +
+              (process.env.EXPO_PUBLIC_API_URL ?? 'unset'),
           };
         }
         if (msg.includes('Network request failed') || msg.includes('Failed to fetch') || msg.includes('aborted')) {

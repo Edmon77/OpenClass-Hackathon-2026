@@ -11,6 +11,7 @@ import { healthRoutes } from './routes/health.js';
 import { notificationsRoutes } from './routes/notifications.js';
 import { settingsRoutes } from './routes/settings.js';
 import { roomAlertsRoutes } from './routes/roomAlerts.js';
+import { structureRoutes } from './routes/structure.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -57,6 +58,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(notificationsRoutes, { prefix: '/notifications' });
   await app.register(settingsRoutes, { prefix: '/settings' });
   await app.register(roomAlertsRoutes, { prefix: '/room-alerts' });
+  await app.register(structureRoutes, { prefix: '/structure' });
 
   return app;
 }

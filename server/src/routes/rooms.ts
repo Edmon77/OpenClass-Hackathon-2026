@@ -52,6 +52,11 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
           floor_index: r.floorIndex,
           building_id: r.buildingId,
           building_name: r.building.name,
+          capacity: r.capacity,
+          room_type: r.roomType,
+          has_projector: r.hasProjector,
+          has_internet: r.hasInternet,
+          has_power: r.hasPower,
           status: getRoomUiState(now, byRoom.get(r.id) ?? []),
         })),
       };
@@ -78,15 +83,15 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
         const bs = await prisma.booking.findMany({
           where: { roomId: r.id },
           orderBy: { startTime: 'asc' },
-          include: { course: { select: { courseName: true } } },
+          include: { courseOffering: { include: { course: { select: { courseName: true } } } } },
         });
         bookingsByRoom[r.id] = bs.map((b) => ({
           id: b.id,
           start_time: b.startTime.toISOString(),
           end_time: b.endTime.toISOString(),
           status: b.status,
-          course_id: b.courseId,
-          course_name: b.course.courseName,
+          course_id: b.courseOffering.courseId,
+          course_name: b.courseOffering.course.courseName,
         }));
       }
 
@@ -102,6 +107,10 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
           floor_index: r.floorIndex,
           capacity: r.capacity,
           equipment_json: r.equipmentJson,
+          room_type: r.roomType,
+          has_projector: r.hasProjector,
+          has_internet: r.hasInternet,
+          has_power: r.hasPower,
           building_name: building.name,
         })),
         bookings_by_room: bookingsByRoom,
@@ -123,7 +132,7 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
       const bookings = await prisma.booking.findMany({
         where: { roomId },
         orderBy: { startTime: 'asc' },
-        include: { course: { select: { courseName: true, id: true } } },
+        include: { courseOffering: { include: { course: { select: { courseName: true, id: true } } } } },
       });
 
       return {
@@ -133,6 +142,10 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
           floor_index: row.floorIndex,
           capacity: row.capacity,
           equipment_json: row.equipmentJson,
+          room_type: row.roomType,
+          has_projector: row.hasProjector,
+          has_internet: row.hasInternet,
+          has_power: row.hasPower,
           building_name: row.building.name,
         },
         bookings: bookings.map((b) => ({
@@ -141,8 +154,8 @@ export const roomsRoutes: FastifyPluginAsync = async (app) => {
           end_time: b.endTime.toISOString(),
           status: b.status,
           event_type: b.eventType,
-          course_id: b.courseId,
-          course_name: b.course.courseName,
+          course_id: b.courseOffering.courseId,
+          course_name: b.courseOffering.course.courseName,
         })),
       };
     }
