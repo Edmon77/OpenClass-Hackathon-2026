@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  teacher
+  admin
+}
+
+enum BookingStatus {
+  booked
+  cancelled
+}
+
+enum AlertSubscriptionStatus {
+  active
+  triggered
+  expired
+  cancelled
+}
+
+enum NotificationType {
+  advance
+  class_start
+  cutoff_warning
+  cancelled
+}
+
+model User {
+  id                   String   @id @default(uuid())
+  studentId            String   @unique @map("student_id")
+  name                 String
+  email                String?
+  passwordHash         String   @map("password_hash")
+  role                 Role
+  department           String?
+  year                 Int?
+  classSection         String?  @map("class_section")
+  forcePasswordChange  Boolean  @default(false) @map("force_password_change")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  coursesTeaching      Course[]           @relation("TeacherCourses")
+  coursesCreatedByCr   Course[]           @relation("CrCreatedCourses")
+  crAssignments        CrAssignment[]
+  bookingsAsTeacher    Booking[]          @relation("BookingTeacher")
+  bookingsAsCr         Booking[]          @relation("BookingCr")
+  roomAlertSubs        RoomAlertSubscription[]
+  notifications        Notification[]
+}
+
+model Semester {
+  id        String   @id @default(uuid())
+  name      String
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+  isActive  Boolean  @default(true) @map("is_active")
+
+  courses       Course[]
+  crAssignments CrAssignment[]
+}
+
+model Building {
+  id         String @id @default(uuid())
+  name       String @map("building_name")
+  floorCount Int    @map("floor_count")
+  isActive   Boolean @default(true) @map("is_active")
+
+  rooms Room[]
+}
+
+model Room {
+  id            String  @id @default(uuid())
+  roomNumber    String  @map("room_number")
+  buildingId    String  @map("building_id")
+  floorIndex    Int     @map("floor_index")
+  capacity      Int
+  equipmentJson String? @map("equipment_json")
+  isActive      Boolean @default(true) @map("is_active")
+
+  building Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+  alerts   RoomAlertSubscription[]
+
+  @@unique([buildingId, roomNumber])
+  @@index([buildingId])
+}
+
+model Course {
+  id                 String   @id @default(uuid())
+  courseCode         String?  @map("course_code")
+  courseName         String   @map("course_name")
+  department         String
+  year               Int
+  classSection       String   @map("class_section")
+  semesterId         String   @map("semester_id")
+  teacherUserId      String   @map("teacher_user_id")
+  teacherContact     String?  @map("teacher_contact")
+  createdByCrUserId  String?  @map("created_by_cr_user_id")
+  isActive           Boolean  @default(true) @map("is_active")
+
+  semester    Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  teacher     User     @relation("TeacherCourses", fields: [teacherUserId], references: [id])
+  createdByCr User?    @relation("CrCreatedCourses", fields: [createdByCrUserId], references: [id])
+
+  bookings Booking[]
+}
+
+model Booking {
+  id            String        @id @default(uuid())
+  roomId        String        @map("room_id")
+  courseId      String        @map("course_id")
+  teacherUserId String?       @map("teacher_user_id")
+  crUserId      String?       @map("cr_user_id")
+  department    String?
+  year          Int?
+  classSection  String?       @map("class_section")
+  startTime               DateTime      @map("start_time")
+  endTime                 DateTime      @map("end_time")
+  status                  BookingStatus
+  nextBookingPreference   Boolean       @default(false) @map("next_booking_preference")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
+
+  room    Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  teacher User?   @relation("BookingTeacher", fields: [teacherUserId], references: [id])
+  cr      User?   @relation("BookingCr", fields: [crUserId], references: [id])
+  notifications Notification[]
+
+  @@index([roomId, startTime])
+  @@index([roomId, status])
+}
+
+model CrAssignment {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  department   String
+  year         Int
+  classSection String   @map("class_section")
+  semesterId   String   @map("semester_id")
+  isActive     Boolean  @default(true) @map("is_active")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([userId, semesterId])
+}
+
+model RoomAlertSubscription {
+  id                  String                  @id @default(uuid())
+  userId              String                  @map("user_id")
+  roomId              String                  @map("room_id")
+  notifyBeforeMinutes Int                     @default(10) @map("notify_before_minutes")
+  expiresAt           DateTime                @map("expires_at")
+  status              AlertSubscriptionStatus
+  notificationId      String?                 @map("notification_id")
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([userId, roomId])
+}
+
+model Notification {
+  id              String           @id @default(uuid())
+  userId          String           @map("user_id")
+  type            NotificationType
+  title           String
+  message         String
+  scheduledTime   DateTime?        @map("scheduled_time")
+  deliveredAt     DateTime?        @map("delivered_at")
+  isRead          Boolean          @default(false) @map("is_read")
+  bookingId       String?          @map("booking_id")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([bookingId])
+  @@map("notifications")
+}
