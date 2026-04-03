@@ -10,7 +10,7 @@ import {
   Platform,
   Switch,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter, useFocusEffect, Stack } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,7 +38,27 @@ import { enterFade, PRESS_SCALE } from '@/src/theme/motion';
 import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
 type CourseOpt = { id: string; course_name: string; department: string; year: number; class_section: string };
-type Bk = BookingRow & { course_name?: string; course_id?: string };
+type Bk = BookingRow & { course_name?: string; course_id?: string; event_type?: string };
+
+const ALL_EVENT_TYPES = ['lecture', 'exam', 'tutor', 'defense', 'lab', 'presentation'] as const;
+type EvType = (typeof ALL_EVENT_TYPES)[number];
+const TEACHER_EVENTS: EvType[] = ['lecture', 'tutor', 'exam', 'lab', 'presentation'];
+const CR_EVENTS: EvType[] = ['lecture', 'presentation', 'lab'];
+
+const EVENT_LABELS: Record<EvType, string> = {
+  lecture: 'Lecture',
+  exam: 'Exam',
+  tutor: 'Tutor',
+  defense: 'Defense',
+  lab: 'LAB',
+  presentation: 'Presentation',
+};
+
+function getAllowedEventTypes(role?: string): EvType[] {
+  if (role === 'admin') return [...ALL_EVENT_TYPES];
+  if (role === 'teacher') return TEACHER_EVENTS;
+  return CR_EVENTS;
+}
 
 function heroConfig(ui: 'green' | 'yellow' | 'red') {
   if (ui === 'green') return { accent: colors.statusFree, title: 'Available', sub: 'Open for use', icon: 'checkmark-circle' as const };
@@ -67,6 +87,7 @@ export default function RoomDetailScreen() {
   const [end, setEnd] = useState(new Date(Date.now() + 2 * 3600000));
   const [showStart, setShowStart] = useState(false);
   const [showEnd, setShowEnd] = useState(false);
+  const [eventType, setEventType] = useState<EvType>('lecture');
   const [preferNextSlot, setPreferNextSlot] = useState(false);
   const [serverAlertId, setServerAlertId] = useState<string | null>(null);
   const [serverAlertExpires, setServerAlertExpires] = useState<number | null>(null);
@@ -90,7 +111,7 @@ export default function RoomDetailScreen() {
     try {
       const cdata = await apiFetch<{ courses: CourseOpt[] }>('/courses/bookable');
       list = cdata.courses;
-      setCanBook(list.length > 0 && (user?.role === 'teacher' || user?.role === 'student'));
+      setCanBook(list.length > 0 && (user?.role === 'teacher' || user?.role === 'student' || user?.role === 'admin'));
     } catch { setCanBook(false); }
     setCourses(list);
     setCourseId((prev) => {
@@ -118,10 +139,26 @@ export default function RoomDetailScreen() {
   const cutoffIso = next ? getTemporaryUseCutoffIso(next.start_time, cutoffMinutes) : null;
   const alertExpiresMs = alert?.expiresAt ?? serverAlertExpires ?? null;
 
+  async function openDatePicker(field: 'start' | 'end') {
+    if (Platform.OS === 'android') {
+      const current = field === 'start' ? start : end;
+      try {
+        const { action, year, month, day } = await (DateTimePickerAndroid as any).open({ value: current, mode: 'date' });
+        if (action === 'dismissedAction') return;
+        const { action: ta, hours, minutes } = await (DateTimePickerAndroid as any).open({ value: current, mode: 'time', is24Hour: true });
+        if (ta === 'dismissedAction') return;
+        const picked = new Date(year, month, day, hours, minutes);
+        if (field === 'start') setStart(picked); else setEnd(picked);
+      } catch { /* user cancelled */ }
+    } else {
+      if (field === 'start') setShowStart(!showStart); else setShowEnd(!showEnd);
+    }
+  }
+
   async function onCreateBooking() {
     if (!user || !courseId) return;
     try {
-      await apiFetch('/bookings', { method: 'POST', json: { roomId, courseId, startTime: start.toISOString(), endTime: end.toISOString(), nextBookingPreference: preferNextSlot } });
+      await apiFetch('/bookings', { method: 'POST', json: { roomId, courseId, eventType, startTime: start.toISOString(), endTime: end.toISOString(), nextBookingPreference: preferNextSlot } });
       setModal(false);
       await load();
       Alert.alert('Booked', 'Room booking saved.');
@@ -261,7 +298,14 @@ export default function RoomDetailScreen() {
         {bookings.filter((b) => b.status === 'booked').map((b) => (
           <View key={b.id} style={styles.bookingCard}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.bookCourse}>{b.course_name ?? 'Course'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+                <Text style={styles.bookCourse}>{b.course_name ?? 'Course'}</Text>
+                {b.event_type && (
+                  <View style={styles.evTag}>
+                    <Text style={styles.evTagText}>{EVENT_LABELS[b.event_type as EvType] ?? b.event_type}</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.bookTime}>{formatDateTime(b.start_time)} → {formatDateTime(b.end_time)}</Text>
             </View>
             {canCancelBooking(b) && (
@@ -301,20 +345,31 @@ export default function RoomDetailScreen() {
               </Pressable>
             ))}
 
+            <SectionHeader title="Event type" />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.sm }}>
+              <View style={styles.evRow}>
+                {getAllowedEventTypes(user?.role).map((ev) => (
+                  <Pressable key={ev} onPress={() => setEventType(ev)} style={[styles.evPill, eventType === ev && styles.evPillOn]}>
+                    <Text style={[styles.evPillText, eventType === ev && styles.evPillTextOn]}>{EVENT_LABELS[ev]}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+
             <SectionHeader title="Start" />
-            <Pressable onPress={() => setShowStart(true)} style={styles.datePicker}>
+            <Pressable onPress={() => openDatePicker('start')} style={styles.datePicker}>
               <Text style={styles.dateText}>{start.toLocaleString()}</Text>
             </Pressable>
-            {showStart && (
-              <DateTimePicker value={start} mode="datetime" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowStart(Platform.OS === 'ios'); if (d) setStart(d); }} />
+            {showStart && Platform.OS === 'ios' && (
+              <DateTimePicker value={start} mode="datetime" display="spinner" onChange={(_, d) => { if (d) setStart(d); }} />
             )}
 
             <SectionHeader title="End" />
-            <Pressable onPress={() => setShowEnd(true)} style={styles.datePicker}>
+            <Pressable onPress={() => openDatePicker('end')} style={styles.datePicker}>
               <Text style={styles.dateText}>{end.toLocaleString()}</Text>
             </Pressable>
-            {showEnd && (
-              <DateTimePicker value={end} mode="datetime" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowEnd(Platform.OS === 'ios'); if (d) setEnd(d); }} />
+            {showEnd && Platform.OS === 'ios' && (
+              <DateTimePicker value={end} mode="datetime" display="spinner" onChange={(_, d) => { if (d) setEnd(d); }} />
             )}
 
             <View style={styles.switchRow}>
@@ -446,6 +501,13 @@ const styles = StyleSheet.create({
   },
   modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.fill, alignSelf: 'center', marginBottom: space.md },
   modalTitle: { ...type.title2, color: colors.label },
+  evRow: { flexDirection: 'row', gap: space.xs },
+  evPill: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: colors.fill },
+  evPillOn: { backgroundColor: colors.campus },
+  evPillText: { ...type.subhead, color: colors.label },
+  evPillTextOn: { ...type.subhead, color: '#fff', fontWeight: '600' },
+  evTag: { backgroundColor: colors.accentMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
+  evTagText: { ...type.caption2, color: colors.accent, fontWeight: '600' },
   courseOpt: {
     padding: space.md,
     borderRadius: radius.md,

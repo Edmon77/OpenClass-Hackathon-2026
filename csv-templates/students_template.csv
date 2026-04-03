@@ -1,0 +1,6 @@
+student_id,name,password,role,department,year,class_section
+STU002,Jane Doe,temp456,student,Software Engineering,5,A
+STU003,Abel Kebede,temp789,student,Software Engineering,5,B
+STU004,Meron Tadesse,temp101,student,Computer Science,4,A
+TCH002,Dr. Girma,teacher123,teacher,Software Engineering,,
+TCH003,Dr. Helen,teacher123,teacher,Computer Science,,

@@ -1,15 +1,20 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { BookingStatus } from '@prisma/client';
+import { BookingStatus, EventType } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { AppError, ROOM_SLOT_CONFLICT } from '../lib/errors.js';
 import { createNotificationsForBooking, onBookingCancelled } from '../lib/bookingNotifications.js';
+
+const EVENT_TYPES = ['lecture', 'exam', 'tutor', 'defense', 'lab', 'presentation'] as const;
+const TEACHER_EVENT_TYPES: readonly string[] = ['lecture', 'tutor', 'exam', 'lab', 'presentation'];
+const CR_EVENT_TYPES: readonly string[] = ['lecture', 'presentation', 'lab'];
 
 const createBody = z.object({
   roomId: z.string().uuid(),
   courseId: z.string().uuid(),
   startTime: z.string().datetime(),
   endTime: z.string().datetime(),
+  eventType: z.enum(EVENT_TYPES).optional(),
   nextBookingPreference: z.boolean().optional(),
 });
 
@@ -67,6 +72,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
         building_name: b.room.building.name,
         course_id: b.courseId,
         course_name: b.course.courseName,
+        event_type: b.eventType,
         start_time: b.startTime.toISOString(),
         end_time: b.endTime.toISOString(),
         status: b.status,
@@ -91,9 +97,14 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!course) return reply.status(404).send({ error: 'Course not found' });
 
+    const eventType = (parsed.data.eventType ?? 'lecture') as EventType;
+
     if (role === 'teacher') {
       if (course.teacherUserId !== userId) {
         return reply.status(403).send({ error: 'Not your course' });
+      }
+      if (!TEACHER_EVENT_TYPES.includes(eventType)) {
+        return reply.status(403).send({ error: `Teachers cannot create "${eventType}" events. Allowed: ${TEACHER_EVENT_TYPES.join(', ')}` });
       }
     } else if (role === 'student') {
       const cr = await prisma.crAssignment.findFirst({
@@ -107,6 +118,9 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
         },
       });
       if (!cr) return reply.status(403).send({ error: 'CR scope required' });
+      if (!CR_EVENT_TYPES.includes(eventType)) {
+        return reply.status(403).send({ error: `CRs cannot create "${eventType}" events. Allowed: ${CR_EVENT_TYPES.join(', ')}` });
+      }
     } else if (role !== 'admin') {
       return reply.status(403).send({ error: 'Forbidden' });
     }
@@ -129,6 +143,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
         department: course.department,
         year: course.year,
         classSection: course.classSection,
+        eventType,
         startTime: start,
         endTime: end,
         status: BookingStatus.booked,
@@ -142,6 +157,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
       booking: {
         id: booking.id,
         room_id: booking.roomId,
+        event_type: booking.eventType,
         start_time: booking.startTime.toISOString(),
         end_time: booking.endTime.toISOString(),
         status: booking.status,
@@ -166,6 +182,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
           start_time: b.startTime.toISOString(),
           end_time: b.endTime.toISOString(),
           status: b.status,
+          event_type: b.eventType,
           course_id: b.courseId,
           course_name: b.course.courseName,
         })),
@@ -188,6 +205,7 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
           id: b.id,
           room_id: b.roomId,
           course_id: b.courseId,
+          event_type: b.eventType,
           start_time: b.startTime.toISOString(),
           end_time: b.endTime.toISOString(),
           status: b.status,

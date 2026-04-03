@@ -24,9 +24,14 @@ type Bk = {
   room_number: string;
   building_name: string;
   course_name: string;
+  event_type?: string;
   start_time: string;
   end_time: string;
   next_booking_preference?: boolean;
+};
+
+const EVENT_LABELS: Record<string, string> = {
+  lecture: 'Lecture', exam: 'Exam', tutor: 'Tutor', defense: 'Defense', lab: 'LAB', presentation: 'Presentation',
 };
 
 export default function MyBookingsScreen() {
@@ -71,7 +76,14 @@ export default function MyBookingsScreen() {
                 <Ionicons name="calendar" size={18} color={colors.accent} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.course}>{item.course_name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+                  <Text style={styles.course}>{item.course_name}</Text>
+                  {item.event_type && (
+                    <View style={styles.evTag}>
+                      <Text style={styles.evTagText}>{EVENT_LABELS[item.event_type] ?? item.event_type}</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.room}>{item.building_name} · {item.room_number}</Text>
               </View>
             </View>
@@ -106,6 +118,8 @@ const styles = StyleSheet.create({
   room: { ...type.subhead, color: colors.secondaryLabel, marginTop: 2 },
   time: { ...type.footnote, color: colors.secondaryLabel, marginTop: space.sm },
   pref: { ...type.caption2, color: colors.tertiaryLabel, marginTop: space.xs, fontStyle: 'italic' },
+  evTag: { backgroundColor: colors.accentMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
+  evTagText: { ...type.caption2, color: colors.accent, fontWeight: '600' },
   cancelBtn: { alignSelf: 'flex-start', marginTop: space.md, paddingVertical: space.xs },
   cancelTxt: { ...type.subhead, color: colors.destructive, fontWeight: '600' },
 });

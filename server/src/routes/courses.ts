@@ -59,6 +59,22 @@ export const coursesRoutes: FastifyPluginAsync = async (app) => {
       const sem = await prisma.semester.findFirst({ where: { isActive: true } });
       if (!sem) return { courses: [] };
 
+      if (role === 'admin') {
+        const courses = await prisma.course.findMany({
+          where: { semesterId: sem.id, isActive: true },
+          orderBy: { courseName: 'asc' },
+        });
+        return {
+          courses: courses.map((c) => ({
+            id: c.id,
+            course_name: c.courseName,
+            department: c.department,
+            year: c.year,
+            class_section: c.classSection,
+          })),
+        };
+      }
+
       if (role === 'teacher') {
         const courses = await prisma.course.findMany({
           where: { teacherUserId: userId, semesterId: sem.id, isActive: true },
@@ -148,6 +164,80 @@ export const coursesRoutes: FastifyPluginAsync = async (app) => {
           course_name: course.courseName,
         },
       };
+    }
+  );
+
+  const updateBody = z.object({
+    courseName: z.string().min(1).optional(),
+    teacherStudentId: z.string().min(1).optional(),
+    teacherContact: z.string().optional(),
+  });
+
+  app.put(
+    '/:id',
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const parsed = updateBody.safeParse(request.body);
+      if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+      const userId = (request.user as { sub: string }).sub;
+      const role = (request.user as { role: string }).role;
+      if (role !== 'student') return reply.status(403).send({ error: 'CR only' });
+
+      const { id } = request.params as { id: string };
+      const course = await prisma.course.findUnique({ where: { id } });
+      if (!course) return reply.status(404).send({ error: 'Course not found' });
+
+      const sem = await prisma.semester.findFirst({ where: { isActive: true } });
+      if (!sem || course.semesterId !== sem.id) return reply.status(400).send({ error: 'Course is not in active semester' });
+
+      const cr = await prisma.crAssignment.findFirst({
+        where: { userId, semesterId: sem.id, isActive: true, department: course.department, year: course.year, classSection: course.classSection },
+      });
+      if (!cr) return reply.status(403).send({ error: 'Not a class rep for this course scope' });
+
+      let teacherUserId = course.teacherUserId;
+      if (parsed.data.teacherStudentId) {
+        const teacher = await prisma.user.findFirst({
+          where: { studentId: parsed.data.teacherStudentId.trim().toUpperCase(), role: 'teacher', isActive: true },
+        });
+        if (!teacher) return reply.status(404).send({ error: 'Teacher not found' });
+        teacherUserId = teacher.id;
+      }
+
+      await prisma.course.update({
+        where: { id },
+        data: {
+          courseName: parsed.data.courseName?.trim() ?? course.courseName,
+          teacherUserId,
+          teacherContact: parsed.data.teacherContact?.trim() ?? course.teacherContact,
+        },
+      });
+      return { ok: true };
+    }
+  );
+
+  app.delete(
+    '/:id',
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { sub: string }).sub;
+      const role = (request.user as { role: string }).role;
+      if (role !== 'student') return reply.status(403).send({ error: 'CR only' });
+
+      const { id } = request.params as { id: string };
+      const course = await prisma.course.findUnique({ where: { id } });
+      if (!course) return reply.status(404).send({ error: 'Course not found' });
+
+      const sem = await prisma.semester.findFirst({ where: { isActive: true } });
+      if (!sem || course.semesterId !== sem.id) return reply.status(400).send({ error: 'Course is not in active semester' });
+
+      const cr = await prisma.crAssignment.findFirst({
+        where: { userId, semesterId: sem.id, isActive: true, department: course.department, year: course.year, classSection: course.classSection },
+      });
+      if (!cr) return reply.status(403).send({ error: 'Not a class rep for this course scope' });
+
+      await prisma.course.update({ where: { id }, data: { isActive: false } });
+      return { ok: true };
     }
   );
 
