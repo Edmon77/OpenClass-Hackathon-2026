@@ -24,7 +24,7 @@ export function categorizeAssistantErrorMessage(errorMessage: string): { status:
   const msg = errorMessage.toLowerCase();
   if (msg.includes('too many requests')) return { status: 429, code: 'rate_limit' };
   if (msg.includes('timeout') || msg.includes('aborted')) return { status: 504, code: 'timeout' };
-  if (msg.includes('openrouter')) return { status: 502, code: 'upstream_error' };
+  if (msg.includes('openrouter') || msg.includes('groq')) return { status: 502, code: 'upstream_error' };
   return { status: 502, code: 'tool_error' };
 }
 

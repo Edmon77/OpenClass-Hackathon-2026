@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { apiFetch, getStoredToken, setStoredToken } from '../api/client';
-import { isApiConfigured } from '../api/config';
+import { getApiBaseUrl, isApiConfigured } from '../api/config';
 import { probeApiHealth, unreachableApiMessage } from '../api/connection';
 import { clearAssistantStorageForUser, clearLegacyAssistantStorage } from '../lib/assistantSession';
 
@@ -79,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (loginId: string, password: string) => {
       if (!apiConfigured) return { ok: false, error: 'API not configured (set EXPO_PUBLIC_API_URL)' };
       try {
-        const base = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
+        const base = getApiBaseUrl();
         const probe = await probeApiHealth(base);
         if (!probe.ok) {
           return { ok: false, error: unreachableApiMessage(base, probe) };
@@ -121,7 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             ok: false,
             error:
               'Login request timed out after 25 s. The API responded to /health but /auth/login did not finish — check server logs and database. API URL: ' +
-              (process.env.EXPO_PUBLIC_API_URL ?? 'unset'),
+              (getApiBaseUrl() || 'unset'),
           };
         }
         if (msg.includes('Network request failed') || msg.includes('Failed to fetch') || msg.includes('aborted')) {

@@ -16,6 +16,7 @@ import {
 import { assistantMaxRoundsFallbackMessage, categorizeAssistantErrorMessage } from '../lib/assistantPolicy.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MAX_TOOL_ROUNDS = 6;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 30;
@@ -71,32 +72,69 @@ type SuggestedAction = {
   payload: { proposal_id: string };
 };
 
-async function openRouterChat(
+type LlmChatConfig = {
+  url: string;
+  apiKey: string;
+  model: string;
+  headers: Record<string, string>;
+  label: string;
+};
+
+function resolveLlmChatConfig(): LlmChatConfig | null {
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (groqKey) {
+    return {
+      url: GROQ_CHAT_URL,
+      apiKey: groqKey,
+      model: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
+      headers: { 'Content-Type': 'application/json' },
+      label: 'Groq',
+    };
+  }
+  const orKey = process.env.OPENROUTER_API_KEY?.trim();
+  if (orKey) {
+    const referer = process.env.OPENROUTER_HTTP_REFERER;
+    const title = process.env.OPENROUTER_APP_TITLE ?? 'Lecture Room Status';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (referer) headers.Referer = referer;
+    headers['X-Title'] = title;
+    return {
+      url: OPENROUTER_URL,
+      apiKey: orKey,
+      // Default free router; paid models need a key with access.
+      model: process.env.OPENROUTER_MODEL?.trim() || 'openrouter/free',
+      headers,
+      label: 'OpenRouter',
+    };
+  }
+  return null;
+}
+
+function isAssistantLlmConfigured(): boolean {
+  return resolveLlmChatConfig() != null;
+}
+
+async function llmChatCompletion(
   messages: ApiMessage[],
   tools: ReturnType<typeof getAiToolDefinitions>
 ): Promise<{
   message: { role: string; content: string | null; tool_calls?: ToolCall[] };
 }> {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) throw new Error('OPENROUTER_API_KEY is not configured');
-
-  // Default to OpenRouter free tier router (paid models like gpt-4o-mini fail on free-only keys).
-  const model = process.env.OPENROUTER_MODEL ?? 'openrouter/free';
-  const referer = process.env.OPENROUTER_HTTP_REFERER;
-  const title = process.env.OPENROUTER_APP_TITLE ?? 'Lecture Room Status';
+  const cfg = resolveLlmChatConfig();
+  if (!cfg) throw new Error('No LLM API key configured (set GROQ_API_KEY or OPENROUTER_API_KEY)');
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${key}`,
-    'Content-Type': 'application/json',
+    ...cfg.headers,
+    Authorization: `Bearer ${cfg.apiKey}`,
   };
-  if (referer) headers.Referer = referer;
-  headers['X-Title'] = title;
 
-  const res = await fetch(OPENROUTER_URL, {
+  const res = await fetch(cfg.url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      model,
+      model: cfg.model,
       messages,
       tools,
       tool_choice: 'auto',
@@ -109,7 +147,7 @@ async function openRouterChat(
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error('OpenRouter returned non-JSON');
+    throw new Error(`${cfg.label} returned non-JSON`);
   }
 
   if (!res.ok) {
@@ -122,14 +160,14 @@ async function openRouterChat(
       msg = typeof err.error === 'string' ? err.error : err.error.message;
     }
     msg = msg ?? err?.message ?? text.slice(0, 200);
-    throw new Error(msg || `OpenRouter HTTP ${res.status}`);
+    throw new Error(msg || `${cfg.label} HTTP ${res.status}`);
   }
 
   const parsed = data as {
     choices?: { message?: { role: string; content: string | null; tool_calls?: ToolCall[] } }[];
   };
   const message = parsed.choices?.[0]?.message;
-  if (!message) throw new Error('OpenRouter returned no message');
+  if (!message) throw new Error(`${cfg.label} returned no message`);
 
   return { message: message as { role: string; content: string | null; tool_calls?: ToolCall[] } };
 }
@@ -142,9 +180,10 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   }));
 
   app.post('/chat', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const key = process.env.OPENROUTER_API_KEY;
-    if (!key?.trim()) {
-      return reply.status(503).send({ error: 'Campus Assistant is not configured (missing OPENROUTER_API_KEY)' });
+    if (!isAssistantLlmConfigured()) {
+      return reply.status(503).send({
+        error: 'Campus Assistant is not configured (set GROQ_API_KEY or OPENROUTER_API_KEY)',
+      });
     }
 
     const parsed = chatBodySchema.safeParse(request.body);
@@ -179,7 +218,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     try {
       while (rounds < MAX_TOOL_ROUNDS) {
         rounds += 1;
-        const { message } = await openRouterChat(messages, tools);
+        const { message } = await llmChatCompletion(messages, tools);
 
         const toolCalls = message.tool_calls?.filter((t) => t.type === 'function') ?? [];
 

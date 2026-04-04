@@ -29,12 +29,12 @@ import {
 import { formatDateTime } from '@/src/lib/time';
 import { buildRoomQrPayload } from '@/src/constants/qr';
 import { useRoomAlertSubscription } from '@/src/hooks/useRoomAlertSubscription';
-import { ScheduleStrip } from '@/src/components/ui/ScheduleStrip';
+import { DayPager } from '@/src/components/ui/DayPager';
+import type { TimelineBlock } from '@/src/components/ui/DayTimeline';
 import { PrimaryButton } from '@/src/components/ui/PrimaryButton';
-import { SecondaryButton } from '@/src/components/ui/SecondaryButton';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
 import { EmptyState } from '@/src/components/ui/EmptyState';
-import { enterFade, PRESS_SCALE } from '@/src/theme/motion';
+import { enterFade } from '@/src/theme/motion';
 import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
 type CourseOpt = { id: string; course_name: string; department: string; year: number; class_section: string };
@@ -72,7 +72,6 @@ function heroConfig(ui: 'green' | 'yellow' | 'red') {
 }
 
 const SLOT_STEP_MS = 15 * 60 * 1000;
-/** Initial gap between start and end when opening the form; user changes end freely in the pickers. */
 const INITIAL_END_AFTER_START_MS = 30 * 60 * 1000;
 
 function roundUpToStep(ms: number, step: number): number {
@@ -87,20 +86,14 @@ function normalizeBookedIntervals(bookedBlocks: { start_time: string; end_time: 
     .sort((a, b) => a.s - b.s);
 }
 
-/**
- * Next 15‑min grid instant that is not inside an existing booking (start may equal a booking’s end time).
- * Does not assume how long the new booking lasts — user sets end in the UI.
- */
 function suggestNextStart(bookedBlocks: { start_time: string; end_time: string; status: string }[]): Date {
   const intervals = normalizeBookedIntervals(bookedBlocks);
   let t = roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS);
-
   for (let guard = 0; guard < 5000; guard++) {
     const inside = intervals.find((iv) => t >= iv.s && t < iv.e);
     if (!inside) return new Date(t);
     t = roundUpToStep(inside.e, SLOT_STEP_MS);
   }
-
   const d = new Date();
   d.setDate(d.getDate() + 1);
   d.setHours(9, 0, 0, 0);
@@ -119,7 +112,6 @@ function mergeTimeKeepingDate(base: Date, newTime: Date): Date {
   return d;
 }
 
-/** Earliest allowed booking start: slightly after now, snapped to the slot grid. */
 function minBookingStartMs(): number {
   return roundUpToStep(Date.now() + 60 * 1000, SLOT_STEP_MS);
 }
@@ -136,6 +128,13 @@ function bookingOverlapsExisting(startMs: number, endMs: number, list: { start_t
       new Date(b.start_time).getTime() < endMs &&
       new Date(b.end_time).getTime() > startMs
   );
+}
+
+function formatBookingSummary(start: Date, end: Date): string {
+  const dateStr = start.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const startStr = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const endStr = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${dateStr}, ${startStr} – ${endStr}`;
 }
 
 export default function RoomDetailScreen() {
@@ -159,15 +158,18 @@ export default function RoomDetailScreen() {
   const [canBook, setCanBook] = useState(false);
   const [modal, setModal] = useState(false);
   const [courseOfferingId, setCourseOfferingId] = useState<string | null>(null);
-  const [start, setStart] = useState(() => {
-    const t = roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS);
-    return new Date(t);
-  });
+  const [start, setStart] = useState(() => new Date(roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS)));
   const [end, setEnd] = useState(() => new Date(roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS) + INITIAL_END_AFTER_START_MS));
   const [eventType, setEventType] = useState<EvType>('lecture');
   const [preferNextSlot, setPreferNextSlot] = useState(false);
   const [serverAlertId, setServerAlertId] = useState<string | null>(null);
   const [serverAlertExpires, setServerAlertExpires] = useState<number | null>(null);
+
+  // Android: tap-to-open pickers
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
 
   const load = useCallback(async (): Promise<Bk[] | null> => {
     if (!isApiConfigured() || !roomId) return null;
@@ -242,18 +244,10 @@ export default function RoomDetailScreen() {
     setEnd(new Date(s.getTime() + dur));
   }, [bookings, end, start]);
 
-  function onPickerEventOk(event: DateTimePickerEvent): boolean {
-    if (event.type === 'dismissed') return false;
-    return true;
-  }
-
   async function onCreateBooking() {
     if (!user || !courseOfferingId) return;
     const rid = typeof roomId === 'string' ? roomId.trim() : '';
-    if (!rid) {
-      Alert.alert('Error', 'Missing room id. Go back and open the room again.');
-      return;
-    }
+    if (!rid) { Alert.alert('Error', 'Missing room id.'); return; }
     const sMs = start.getTime();
     const eMs = end.getTime();
     if (!Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) {
@@ -266,10 +260,7 @@ export default function RoomDetailScreen() {
     }
     const booked = bookings.filter((b) => String(b.status).toLowerCase() === 'booked');
     if (bookingOverlapsExisting(sMs, eMs, booked)) {
-      Alert.alert(
-        'That time is taken',
-        'This overlaps another booking in this room. Tap “Next free start” or change start and end below.'
-      );
+      Alert.alert('Time is taken', 'This overlaps another booking. Tap "Next free" or change your times.');
       return;
     }
     try {
@@ -291,31 +282,37 @@ export default function RoomDetailScreen() {
   }
 
   async function onCancelBooking(bid: string) {
-    try { await apiFetch(`/bookings/${bid}`, { method: 'DELETE' }); await load(); } catch (e) { Alert.alert('Error', String(e)); }
+    Alert.alert('Cancel booking?', 'This will free the room for that time slot.', [
+      { text: 'Keep', style: 'cancel' },
+      {
+        text: 'Cancel booking',
+        style: 'destructive',
+        onPress: async () => {
+          try { await apiFetch(`/bookings/${bid}`, { method: 'DELETE' }); await load(); } catch (e) { Alert.alert('Error', String(e)); }
+        },
+      },
+    ]);
   }
 
-  function canCancelBooking(row: Bk): boolean {
-    if (!user) return false;
-    if (user.role === 'admin') return true;
-    const oid = row.course_offering_id;
-    if (!oid) return false;
-    return courses.some((c) => c.id === oid);
-  }
+  const canCancelBooking = useCallback(
+    (row: Bk | TimelineBlock): boolean => {
+      if (!user) return false;
+      if (user.role === 'admin') return true;
+      const oid = (row as Bk).course_offering_id;
+      if (!oid) return false;
+      return courses.some((c) => c.id === oid);
+    },
+    [user, courses]
+  );
 
   async function subscribeRoomAlert() {
     if (!user) return;
     const rid = typeof roomId === 'string' ? roomId.trim() : '';
-    if (!rid) {
-      Alert.alert('Error', 'Missing room id. Go back and open the room again.');
-      return;
-    }
+    if (!rid) { Alert.alert('Error', 'Missing room id.'); return; }
     const cmRaw = Number(cutoffMinutes);
     const cm = Number.isFinite(cmRaw) ? Math.min(120, Math.max(1, Math.round(cmRaw))) : 10;
     const fresh = await load();
-    if (!fresh) {
-      Alert.alert('Error', 'Could not load this room’s schedule. Try again.');
-      return;
-    }
+    if (!fresh) { Alert.alert('Error', 'Could not load this room\'s schedule.'); return; }
     const nowMs = Date.now();
     const nextBk = fresh
       .filter((b) => b.status === 'booked' && new Date(b.start_time).getTime() > nowMs)
@@ -334,10 +331,7 @@ export default function RoomDetailScreen() {
         await scheduleRoomNeededAlert(roomNum, triggerAt, cm);
         Alert.alert('Alert active', 'Local reminder + server subscription (2h).');
       } else {
-        Alert.alert(
-          'Alert active',
-          'Subscribed for 2h on the server. No future class start is scheduled for this room—add a booking with a future start time, then tap Notify me again for a local reminder.'
-        );
+        Alert.alert('Alert active', 'Subscribed for 2h on the server.');
       }
     } catch (e) { Alert.alert('Error', String(e)); }
   }
@@ -351,24 +345,37 @@ export default function RoomDetailScreen() {
     const hint = roomNum
       ? `Summarize this room (${roomNum}) and suggest the next best booking option for me.`
       : 'Summarize this room and suggest the next best booking option for me.';
-    router.push({
-      pathname: '/(app)/(tabs)/(assistant)',
-      params: { q: hint },
-    });
+    router.push({ pathname: '/(app)/(tabs)/(assistant)', params: { q: hint } });
   }
 
+  const timelineBlocks: TimelineBlock[] = useMemo(
+    () =>
+      bookings.map((b) => ({
+        id: b.id,
+        start_time: b.start_time,
+        end_time: b.end_time,
+        status: b.status,
+        label: b.course_name,
+        event_type: b.event_type,
+        course_offering_id: b.course_offering_id,
+      })),
+    [bookings]
+  );
+
   if (!isApiConfigured()) return <EmptyState icon="cloud-offline-outline" title="Configure API URL" />;
+
+  const evChoices = getAllowedEventTypes(user?.role);
 
   return (
     <>
       <Stack.Screen options={{ title: roomNum || 'Room' }} />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollPad}>
-        {/* Hero with accent stripe */}
+        {/* ─── Hero Card ─── */}
         <Animated.View entering={enterFade(400)} style={styles.heroCard}>
           <View style={[styles.heroStripe, { backgroundColor: hero.accent }]} />
           <View style={styles.heroBody}>
             <View style={[styles.heroIconCircle, { backgroundColor: hero.accent + '22' }]}>
-              <Ionicons name={hero.icon} size={28} color={hero.accent} />
+              <Ionicons name={hero.icon} size={24} color={hero.accent} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.heroTitle}>{hero.title}</Text>
@@ -376,31 +383,31 @@ export default function RoomDetailScreen() {
             </View>
           </View>
           <Text style={styles.heroRoom}>{roomNum || '…'}</Text>
+
+          {/* Info chips merged into hero */}
+          <View style={styles.chipRow}>
+            <View style={styles.infoChip}>
+              <Ionicons name="business-outline" size={12} color={colors.secondaryLabel} />
+              <Text style={styles.chipText}>{building}</Text>
+            </View>
+            <View style={styles.infoChip}>
+              <Ionicons name="layers-outline" size={12} color={colors.secondaryLabel} />
+              <Text style={styles.chipText}>Floor {floor === 0 ? 'G' : floor}</Text>
+            </View>
+            <View style={styles.infoChip}>
+              <Ionicons name="people-outline" size={12} color={colors.secondaryLabel} />
+              <Text style={styles.chipText}>{capacity} seats</Text>
+            </View>
+            {equipment.map((e, i) => (
+              <View key={i} style={styles.infoChip}>
+                <Ionicons name="construct-outline" size={12} color={colors.secondaryLabel} />
+                <Text style={styles.chipText}>{e}</Text>
+              </View>
+            ))}
+          </View>
         </Animated.View>
 
-        {/* Info chips */}
-        <View style={styles.chipRow}>
-          <View style={styles.infoChip}>
-            <Ionicons name="business-outline" size={14} color={colors.secondaryLabel} />
-            <Text style={styles.chipText}>{building}</Text>
-          </View>
-          <View style={styles.infoChip}>
-            <Ionicons name="layers-outline" size={14} color={colors.secondaryLabel} />
-            <Text style={styles.chipText}>Floor {floor === 0 ? 'G' : floor}</Text>
-          </View>
-          <View style={styles.infoChip}>
-            <Ionicons name="people-outline" size={14} color={colors.secondaryLabel} />
-            <Text style={styles.chipText}>{capacity} seats</Text>
-          </View>
-          {equipment.map((e, i) => (
-            <View key={i} style={styles.infoChip}>
-              <Ionicons name="construct-outline" size={14} color={colors.secondaryLabel} />
-              <Text style={styles.chipText}>{e}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Status callouts */}
+        {/* ─── Status callouts ─── */}
         {next && ui === 'yellow' && cutoffIso && (
           <View style={styles.callout}>
             <Ionicons name="time-outline" size={18} color={colors.accent} />
@@ -420,7 +427,7 @@ export default function RoomDetailScreen() {
           </View>
         )}
 
-        {/* Alert active */}
+        {/* ─── Alert banner ─── */}
         {(alert || serverAlertId) && (
           <View style={styles.alertBanner}>
             <Ionicons name="notifications" size={16} color={colors.campus} />
@@ -433,50 +440,41 @@ export default function RoomDetailScreen() {
           </View>
         )}
 
-        {/* Actions */}
-        <View style={styles.actionsRow}>
+        {/* ─── Action bar (icon buttons) ─── */}
+        <View style={styles.actionBar}>
           {canBook && (
-            <PrimaryButton title="Book this room" onPress={openBookingModal} style={{ flex: 1 }} />
+            <Pressable style={styles.actionBtn} onPress={openBookingModal}>
+              <View style={[styles.actionIconWrap, { backgroundColor: colors.campusMuted }]}>
+                <Ionicons name="add-circle-outline" size={24} color={colors.campus} />
+              </View>
+              <Text style={styles.actionLabel}>Book</Text>
+            </Pressable>
           )}
-          <SecondaryButton title="Notify me" onPress={subscribeRoomAlert} style={{ flex: canBook ? 1 : undefined }} />
-          <SecondaryButton title="Ask AI" onPress={askAssistantAboutRoom} style={{ flex: canBook ? 1 : undefined }} />
+          <Pressable style={styles.actionBtn} onPress={subscribeRoomAlert}>
+            <View style={[styles.actionIconWrap, { backgroundColor: colors.accentMuted }]}>
+              <Ionicons name="notifications-outline" size={22} color={colors.accent} />
+            </View>
+            <Text style={styles.actionLabel}>Notify</Text>
+          </Pressable>
+          <Pressable style={styles.actionBtn} onPress={askAssistantAboutRoom}>
+            <View style={[styles.actionIconWrap, { backgroundColor: 'rgba(175, 82, 222, 0.12)' }]}>
+              <Ionicons name="sparkles-outline" size={22} color="#AF52DE" />
+            </View>
+            <Text style={styles.actionLabel}>Ask AI</Text>
+          </Pressable>
         </View>
 
-        {/* Schedule strip */}
-        <SectionHeader title="Today's schedule" />
-        <View style={styles.stripCard}>
-          <ScheduleStrip
-            blocks={bookings.filter((b) => b.status === 'booked').map((b) => ({ id: b.id, start_time: b.start_time, end_time: b.end_time, status: b.status, label: b.course_name }))}
+        {/* ─── Calendar (DayPager + DayTimeline) ─── */}
+        <SectionHeader title="Schedule" />
+        <View style={styles.calendarWrap}>
+          <DayPager
+            blocks={timelineBlocks}
+            onCancelBooking={onCancelBooking}
+            canCancelBooking={canCancelBooking}
           />
         </View>
 
-        {/* Bookings list */}
-        <SectionHeader title="Bookings" />
-        {bookings.filter((b) => b.status === 'booked').map((b) => (
-          <View key={b.id} style={styles.bookingCard}>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
-                <Text style={styles.bookCourse}>{b.course_name ?? 'Course'}</Text>
-                {b.event_type && (
-                  <View style={styles.evTag}>
-                    <Text style={styles.evTagText}>{EVENT_LABELS[b.event_type as EvType] ?? b.event_type}</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.bookTime}>{formatDateTime(b.start_time)} → {formatDateTime(b.end_time)}</Text>
-            </View>
-            {canCancelBooking(b) && (
-              <Pressable onPress={() => onCancelBooking(b.id)} hitSlop={8}>
-                <Text style={styles.cancelLink}>Cancel</Text>
-              </Pressable>
-            )}
-          </View>
-        ))}
-        {bookings.filter((b) => b.status === 'booked').length === 0 && (
-          <Text style={styles.emptyNote}>No bookings scheduled.</Text>
-        )}
-
-        {/* QR / Scan */}
+        {/* ─── QR / Scan ─── */}
         <SectionHeader title="Room link" />
         <View style={styles.qrCard}>
           <Text selectable style={styles.qrText}>{buildRoomQrPayload(roomId ?? '')}</Text>
@@ -487,7 +485,7 @@ export default function RoomDetailScreen() {
         </Pressable>
       </ScrollView>
 
-      {/* Booking modal (half-sheet) */}
+      {/* ─── Booking modal (half-sheet) ─── */}
       <Modal visible={modal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <Pressable style={styles.modalDismiss} onPress={() => setModal(false)} />
@@ -500,24 +498,30 @@ export default function RoomDetailScreen() {
             >
               <View style={styles.modalHandle} />
               <Text style={styles.modalTitle}>New booking</Text>
-              <Text style={styles.modalHint}>
-                Choose start and end with the pickers below. Start must be in the future. We suggest the next free start and a 30-minute span — adjust the end for a longer or shorter booking.
-              </Text>
+
+              {/* Time summary */}
+              <View style={styles.timeSummaryCard}>
+                <Ionicons name="calendar-outline" size={18} color={colors.campus} />
+                <Text style={styles.timeSummaryText}>{formatBookingSummary(start, end)}</Text>
+              </View>
               <Pressable onPress={applyNextFreeSlot} style={styles.linkChip}>
-                <Text style={styles.linkChipText}>Next free start</Text>
+                <Text style={styles.linkChipText}>Next free slot</Text>
               </Pressable>
 
+              {/* Course */}
               <SectionHeader title="Course" style={{ marginTop: space.sm }} />
               {courses.map((c) => (
                 <Pressable key={c.id} onPress={() => setCourseOfferingId(c.id)} style={[styles.courseOpt, courseOfferingId === c.id && styles.courseOptOn]}>
                   <Text style={[styles.courseOptText, courseOfferingId === c.id && { color: colors.campus }]}>{c.course_name}</Text>
+                  <Text style={styles.courseOptSub}>{c.department} · Y{c.year} {c.class_section}</Text>
                 </Pressable>
               ))}
 
+              {/* Event type */}
               <SectionHeader title="Event type" />
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.sm }}>
                 <View style={styles.evRow}>
-                  {getAllowedEventTypes(user?.role).map((ev) => (
+                  {evChoices.map((ev) => (
                     <Pressable key={ev} onPress={() => setEventType(ev)} style={[styles.evPill, eventType === ev && styles.evPillOn]}>
                       <Text style={[styles.evPillText, eventType === ev && styles.evPillTextOn]}>{EVENT_LABELS[ev]}</Text>
                     </Pressable>
@@ -525,102 +529,131 @@ export default function RoomDetailScreen() {
                 </View>
               </ScrollView>
 
+              {/* Start time */}
               <SectionHeader title="Start" />
-              <View style={styles.datePicker}>
-                <Text style={styles.dateText}>{start.toLocaleString()}</Text>
-              </View>
               {Platform.OS === 'ios' ? (
                 <DateTimePicker
                   value={start}
                   mode="datetime"
-                  display="spinner"
+                  display="compact"
                   minimumDate={new Date(minBookingStartMs())}
+                  accentColor={colors.campus}
                   onChange={(event, d) => {
-                    if (!onPickerEventOk(event) || !d) return;
+                    if (event.type === 'dismissed' || !d) return;
                     applyStart(d);
                   }}
+                  style={styles.iosCompactPicker}
                 />
               ) : (
-                <View style={styles.pickerCol}>
-                  <Text style={styles.pickerLabel}>Date</Text>
-                  <DateTimePicker
-                    value={start}
-                    mode="date"
-                    display="spinner"
-                    minimumDate={new Date(minBookingStartMs())}
-                    onChange={(event, d) => {
-                      if (!onPickerEventOk(event) || !d) return;
-                      setStart((prev) => {
-                        const next = clampStartNotInPast(mergeDateKeepingTime(prev, d));
-                        setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
-                        return next;
-                      });
-                    }}
-                    style={styles.pickerSpin}
-                  />
-                  <Text style={styles.pickerLabel}>Time</Text>
-                  <DateTimePicker
-                    value={start}
-                    mode="time"
-                    display="spinner"
-                    is24Hour
-                    onChange={(event, d) => {
-                      if (!onPickerEventOk(event) || !d) return;
-                      setStart((prev) => {
-                        const next = clampStartNotInPast(mergeTimeKeepingDate(prev, d));
-                        setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
-                        return next;
-                      });
-                    }}
-                    style={styles.pickerSpin}
-                  />
+                <View style={styles.androidPickerRow}>
+                  <Pressable style={styles.androidPickerBtn} onPress={() => setShowStartDatePicker(true)}>
+                    <Ionicons name="calendar-outline" size={16} color={colors.accent} />
+                    <Text style={styles.androidPickerText}>
+                      {start.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </Text>
+                  </Pressable>
+                  <Pressable style={styles.androidPickerBtn} onPress={() => setShowStartTimePicker(true)}>
+                    <Ionicons name="time-outline" size={16} color={colors.accent} />
+                    <Text style={styles.androidPickerText}>
+                      {start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                    </Text>
+                  </Pressable>
+                  {showStartDatePicker && (
+                    <DateTimePicker
+                      value={start}
+                      mode="date"
+                      display="default"
+                      minimumDate={new Date(minBookingStartMs())}
+                      onChange={(event, d) => {
+                        setShowStartDatePicker(false);
+                        if (event.type === 'dismissed' || !d) return;
+                        setStart((prev) => {
+                          const next = clampStartNotInPast(mergeDateKeepingTime(prev, d));
+                          setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
+                          return next;
+                        });
+                      }}
+                    />
+                  )}
+                  {showStartTimePicker && (
+                    <DateTimePicker
+                      value={start}
+                      mode="time"
+                      display="default"
+                      is24Hour
+                      onChange={(event, d) => {
+                        setShowStartTimePicker(false);
+                        if (event.type === 'dismissed' || !d) return;
+                        setStart((prev) => {
+                          const next = clampStartNotInPast(mergeTimeKeepingDate(prev, d));
+                          setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
+                          return next;
+                        });
+                      }}
+                    />
+                  )}
                 </View>
               )}
 
+              {/* End time */}
               <SectionHeader title="End" />
-              <View style={styles.datePicker}>
-                <Text style={styles.dateText}>{end.toLocaleString()}</Text>
-              </View>
               {Platform.OS === 'ios' ? (
                 <DateTimePicker
                   value={end}
                   mode="datetime"
-                  display="spinner"
+                  display="compact"
                   minimumDate={new Date(start.getTime() + 60 * 1000)}
+                  accentColor={colors.campus}
                   onChange={(event, d) => {
-                    if (!onPickerEventOk(event) || !d) return;
+                    if (event.type === 'dismissed' || !d) return;
                     setEnd(d);
                   }}
+                  style={styles.iosCompactPicker}
                 />
               ) : (
-                <View style={styles.pickerCol}>
-                  <Text style={styles.pickerLabel}>Date</Text>
-                  <DateTimePicker
-                    value={end}
-                    mode="date"
-                    display="spinner"
-                    minimumDate={new Date(start.getTime())}
-                    onChange={(event, d) => {
-                      if (!onPickerEventOk(event) || !d) return;
-                      setEnd((prev) => mergeDateKeepingTime(prev, d));
-                    }}
-                    style={styles.pickerSpin}
-                  />
-                  <Text style={styles.pickerLabel}>Time</Text>
-                  <DateTimePicker
-                    value={end}
-                    mode="time"
-                    display="spinner"
-                    is24Hour
-                    onChange={(event, d) => {
-                      if (!onPickerEventOk(event) || !d) return;
-                      setEnd((prev) => mergeTimeKeepingDate(prev, d));
-                    }}
-                    style={styles.pickerSpin}
-                  />
+                <View style={styles.androidPickerRow}>
+                  <Pressable style={styles.androidPickerBtn} onPress={() => setShowEndDatePicker(true)}>
+                    <Ionicons name="calendar-outline" size={16} color={colors.accent} />
+                    <Text style={styles.androidPickerText}>
+                      {end.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </Text>
+                  </Pressable>
+                  <Pressable style={styles.androidPickerBtn} onPress={() => setShowEndTimePicker(true)}>
+                    <Ionicons name="time-outline" size={16} color={colors.accent} />
+                    <Text style={styles.androidPickerText}>
+                      {end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                    </Text>
+                  </Pressable>
+                  {showEndDatePicker && (
+                    <DateTimePicker
+                      value={end}
+                      mode="date"
+                      display="default"
+                      minimumDate={new Date(start.getTime())}
+                      onChange={(event, d) => {
+                        setShowEndDatePicker(false);
+                        if (event.type === 'dismissed' || !d) return;
+                        setEnd((prev) => mergeDateKeepingTime(prev, d));
+                      }}
+                    />
+                  )}
+                  {showEndTimePicker && (
+                    <DateTimePicker
+                      value={end}
+                      mode="time"
+                      display="default"
+                      is24Hour
+                      onChange={(event, d) => {
+                        setShowEndTimePicker(false);
+                        if (event.type === 'dismissed' || !d) return;
+                        setEnd((prev) => mergeTimeKeepingDate(prev, d));
+                      }}
+                    />
+                  )}
                 </View>
               )}
 
+              {/* Prefer next slot */}
               <View style={styles.switchRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.switchLabel}>Prefer same room next slot</Text>
@@ -629,11 +662,12 @@ export default function RoomDetailScreen() {
                 <Switch value={preferNextSlot} onValueChange={setPreferNextSlot} trackColor={{ true: colors.campus }} />
               </View>
 
+              {/* Actions */}
               <View style={styles.modalActions}>
-                <Pressable onPress={() => setModal(false)}>
-                  <Text style={styles.cancelLink}>Close</Text>
+                <Pressable onPress={() => setModal(false)} style={styles.modalCloseBtn}>
+                  <Text style={styles.modalCloseText}>Close</Text>
                 </Pressable>
-                <PrimaryButton title="Save booking" onPress={onCreateBooking} style={{ flex: 1, marginLeft: space.md }} />
+                <PrimaryButton title="Save booking" onPress={onCreateBooking} style={{ flex: 1 }} />
               </View>
             </ScrollView>
           </View>
@@ -647,32 +681,34 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: colors.groupedBackground },
   scrollPad: { paddingBottom: 48 },
 
+  /* Hero */
   heroCard: {
     marginHorizontal: space.lg,
     marginTop: space.md,
     backgroundColor: colors.systemBackground,
     borderRadius: radius.xl,
     padding: space.lg,
+    paddingBottom: space.md,
     overflow: 'hidden',
     ...shadows.card,
   },
-  heroStripe: { position: 'absolute', top: 0, left: 0, right: 0, height: 5, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
-  heroBody: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.xs },
-  heroIconCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  heroTitle: { ...type.title2, color: colors.label },
-  heroSub: { ...type.subhead, color: colors.secondaryLabel, marginTop: 2 },
-  heroRoom: { ...type.largeTitle, color: colors.label, marginTop: space.md },
+  heroStripe: { position: 'absolute', top: 0, left: 0, right: 0, height: 4, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
+  heroBody: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xs },
+  heroIconCircle: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  heroTitle: { ...type.headline, color: colors.label },
+  heroSub: { ...type.caption1, color: colors.secondaryLabel, marginTop: 1 },
+  heroRoom: { ...type.title1, color: colors.label, marginTop: space.sm },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs, marginTop: space.sm },
+  infoChip: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.fill, paddingHorizontal: space.xs + 2, paddingVertical: 4, borderRadius: radius.pill },
+  chipText: { ...type.caption2, color: colors.secondaryLabel },
 
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginHorizontal: space.lg, marginTop: space.md },
-  infoChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.fill, paddingHorizontal: space.sm, paddingVertical: 5, borderRadius: radius.pill },
-  chipText: { ...type.caption1, color: colors.secondaryLabel },
-
+  /* Status callouts */
   callout: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
     marginHorizontal: space.lg,
-    marginTop: space.md,
+    marginTop: space.sm,
     padding: space.md,
     backgroundColor: colors.accentMuted,
     borderRadius: radius.md,
@@ -680,12 +716,13 @@ const styles = StyleSheet.create({
   calloutTitle: { ...type.subhead, fontWeight: '700', color: colors.accent },
   calloutBody: { ...type.footnote, color: colors.secondaryLabel, marginTop: 2 },
 
+  /* Alert banner */
   alertBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
     marginHorizontal: space.lg,
-    marginTop: space.md,
+    marginTop: space.sm,
     padding: space.md,
     backgroundColor: colors.campusMuted,
     borderRadius: radius.md,
@@ -693,30 +730,29 @@ const styles = StyleSheet.create({
   alertText: { ...type.caption1, color: colors.campus, flex: 1, fontWeight: '600' },
   alertCancel: { ...type.subhead, color: colors.accent, fontWeight: '600' },
 
-  actionsRow: { flexDirection: 'row', gap: space.sm, marginHorizontal: space.lg, marginTop: space.lg },
-
-  stripCard: {
-    marginHorizontal: space.lg,
-    backgroundColor: colors.systemBackground,
-    borderRadius: radius.lg,
-    padding: space.md,
-    paddingBottom: space.xl,
-    ...shadows.card,
-  },
-
-  bookingCard: {
+  /* Action bar */
+  actionBar: {
     flexDirection: 'row',
-    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.xl,
     marginHorizontal: space.lg,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.separator,
+    marginTop: space.lg,
+    marginBottom: space.xs,
   },
-  bookCourse: { ...type.headline, color: colors.label },
-  bookTime: { ...type.footnote, color: colors.secondaryLabel, marginTop: 2 },
-  cancelLink: { ...type.headline, color: colors.destructive },
-  emptyNote: { ...type.body, color: colors.secondaryLabel, marginHorizontal: space.lg, marginTop: space.sm },
+  actionBtn: { alignItems: 'center', gap: space.xs },
+  actionIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionLabel: { ...type.caption1, fontWeight: '600', color: colors.secondaryLabel },
 
+  /* Calendar */
+  calendarWrap: { marginHorizontal: space.lg },
+
+  /* QR */
   qrCard: {
     marginHorizontal: space.lg,
     padding: space.md,
@@ -739,6 +775,7 @@ const styles = StyleSheet.create({
   },
   ghostBtnText: { ...type.headline, color: colors.accent },
 
+  /* Modal */
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay },
   modalDismiss: { flex: 1 },
   modalSheet: {
@@ -753,16 +790,31 @@ const styles = StyleSheet.create({
   modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.fill, alignSelf: 'center', marginBottom: space.md },
   modalTitle: { ...type.title2, color: colors.label },
   modalScrollContent: { paddingBottom: space.xl },
-  modalHint: { ...type.footnote, color: colors.secondaryLabel, marginTop: space.sm },
+
+  timeSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.md,
+    padding: space.md,
+    backgroundColor: colors.campusMuted,
+    borderRadius: radius.md,
+  },
+  timeSummaryText: {
+    ...type.subhead,
+    fontWeight: '600',
+    color: colors.campus,
+    flex: 1,
+  },
   linkChip: { alignSelf: 'flex-start', marginTop: space.sm, paddingVertical: space.xs, paddingHorizontal: space.sm },
   linkChipText: { ...type.subhead, color: colors.campus, fontWeight: '600' },
+
   evRow: { flexDirection: 'row', gap: space.xs },
   evPill: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: colors.fill },
   evPillOn: { backgroundColor: colors.campus },
   evPillText: { ...type.subhead, color: colors.label },
   evPillTextOn: { ...type.subhead, color: '#fff', fontWeight: '600' },
-  evTag: { backgroundColor: colors.accentMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
-  evTagText: { ...type.caption2, color: colors.accent, fontWeight: '600' },
+
   courseOpt: {
     padding: space.md,
     borderRadius: radius.md,
@@ -772,17 +824,40 @@ const styles = StyleSheet.create({
   },
   courseOptOn: { borderColor: colors.campus, backgroundColor: colors.campusMuted },
   courseOptText: { ...type.body, color: colors.label },
-  datePicker: {
+  courseOptSub: { ...type.caption1, color: colors.secondaryLabel, marginTop: 2 },
+
+  iosCompactPicker: {
+    alignSelf: 'flex-start',
+    marginBottom: space.sm,
+  },
+
+  androidPickerRow: {
+    flexDirection: 'row',
+    gap: space.sm,
+    marginBottom: space.sm,
+  },
+  androidPickerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
     padding: space.md,
     backgroundColor: colors.secondarySystemBackground,
     borderRadius: radius.md,
   },
-  dateText: { ...type.body, color: colors.label },
-  pickerCol: { marginTop: space.xs },
-  pickerLabel: { ...type.caption1, color: colors.secondaryLabel, marginTop: space.sm },
-  pickerSpin: { alignSelf: 'stretch', height: Platform.OS === 'android' ? 128 : undefined },
+  androidPickerText: {
+    ...type.subhead,
+    color: colors.label,
+  },
+
   switchRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.lg, gap: space.md },
   switchLabel: { ...type.subhead, color: colors.label, fontWeight: '600' },
   switchHint: { ...type.caption2, color: colors.tertiaryLabel, marginTop: 4 },
-  modalActions: { flexDirection: 'row', alignItems: 'center', marginTop: space.xl },
+
+  modalActions: { flexDirection: 'row', alignItems: 'center', marginTop: space.xl, gap: space.md },
+  modalCloseBtn: {
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+  },
+  modalCloseText: { ...type.headline, color: colors.secondaryLabel },
 });
