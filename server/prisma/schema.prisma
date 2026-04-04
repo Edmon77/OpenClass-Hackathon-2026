@@ -49,6 +49,13 @@ enum RoomType {
   other
 }
 
+enum AssistantProposalStatus {
+  pending
+  confirmed
+  cancelled
+  expired
+}
+
 model Faculty {
   id        String   @id @default(uuid())
   name      String   @unique
@@ -161,6 +168,7 @@ model User {
   bookingsAsBooker Booking[] @relation("BookingBookedBy")
   roomAlertSubs    RoomAlertSubscription[]
   notifications    Notification[]
+  assistantProposals AssistantProposal[]
 }
 
 model Building {
@@ -249,6 +257,22 @@ model RoomAlertSubscription {
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@index([userId, roomId])
+}
+
+model AssistantProposal {
+  id         String                  @id @default(cuid())
+  userId     String                  @map("user_id")
+  action     String
+  payloadJson String                 @map("payload_json")
+  summary    String
+  status     AssistantProposalStatus @default(pending)
+  expiresAt  DateTime                @map("expires_at")
+  confirmedAt DateTime?              @map("confirmed_at")
+  createdAt  DateTime                @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, expiresAt])
 }
 
 model Notification {

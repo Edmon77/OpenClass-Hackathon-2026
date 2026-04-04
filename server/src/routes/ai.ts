@@ -1,7 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { AiUserContext } from '../lib/aiContext.js';
-import { executeAiTool, getAiToolDefinitions } from '../lib/aiTools.js';
+import {
+  cancelAssistantProposal,
+  confirmAssistantProposal,
+  executeAiTool,
+  getAiToolDefinitions,
+  type AssistantProposalResult,
+} from '../lib/aiTools.js';
 import {
   buildCampusAssistantSystemPrompt,
   buildSessionBrief,
@@ -33,6 +39,11 @@ const clientContextSchema = z
   .object({
     screen: z.string().max(120).optional(),
     platform: z.string().max(64).optional(),
+    route: z.string().max(200).optional(),
+    room_id: z.string().optional(),
+    building_id: z.string().optional(),
+    booking_id: z.string().optional(),
+    timezone: z.string().max(80).optional(),
   })
   .optional();
 
@@ -52,6 +63,12 @@ type ApiMessage =
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
+
+type SuggestedAction = {
+  type: 'confirm_proposal' | 'cancel_proposal';
+  label: string;
+  payload: { proposal_id: string };
+};
 
 async function openRouterChat(
   messages: ApiMessage[],
@@ -154,6 +171,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
     let rounds = 0;
     let lastAssistantText: string | null = null;
+    let latestProposal: AssistantProposalResult | null = null;
 
     try {
       while (rounds < MAX_TOOL_ROUNDS) {
@@ -181,6 +199,20 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
           const name = call.function?.name ?? '';
           const args = call.function?.arguments ?? '{}';
           const result = await executeAiTool(name, args, ctx);
+          try {
+            const parsedResult = JSON.parse(result) as Partial<AssistantProposalResult>;
+            if (
+              parsedResult &&
+              typeof parsedResult.proposal_id === 'string' &&
+              typeof parsedResult.action === 'string' &&
+              typeof parsedResult.summary === 'string' &&
+              typeof parsedResult.expires_at === 'string'
+            ) {
+              latestProposal = parsedResult as AssistantProposalResult;
+            }
+          } catch {
+            // ignore non-JSON or non-proposal tool output
+          }
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
@@ -203,11 +235,52 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
           role: 'assistant' as const,
           content: lastAssistantText ?? '',
         },
+        ...(latestProposal
+          ? {
+              proposal: latestProposal,
+              suggested_actions: [
+                {
+                  type: 'confirm_proposal' as const,
+                  label: 'Confirm',
+                  payload: { proposal_id: latestProposal.proposal_id },
+                },
+                {
+                  type: 'cancel_proposal' as const,
+                  label: 'Cancel',
+                  payload: { proposal_id: latestProposal.proposal_id },
+                },
+              ] satisfies SuggestedAction[],
+            }
+          : {}),
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Assistant request failed';
       request.log.warn({ err: e }, 'openrouter_chat_failed');
       return reply.status(502).send({ error: msg });
     }
+  });
+
+  app.post('/confirm', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const parsed = z
+      .object({
+        proposal_id: z.string().min(1),
+        confirmed: z.boolean().optional(),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+
+    const userId = (request.user as { sub: string }).sub;
+    const role = (request.user as { role: string }).role as AiUserContext['role'];
+    const ctx: AiUserContext = { userId, role };
+
+    if (parsed.data.confirmed === false) {
+      const cancelled = await cancelAssistantProposal(parsed.data.proposal_id, ctx);
+      if (!cancelled.ok) return reply.status(400).send({ error: cancelled.error });
+      return { ok: true, cancelled: true };
+    }
+
+    const result = await confirmAssistantProposal(parsed.data.proposal_id, ctx);
+    if (!result.ok) return reply.status(400).send({ error: result.error });
+    return result;
   });
 };

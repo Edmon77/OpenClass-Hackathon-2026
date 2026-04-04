@@ -4,7 +4,15 @@ import type { AiUserContext } from './aiContext.js';
 
 export type SessionBrief = {
   session_brief_version: 1;
-  client_context?: { screen?: string; platform?: string };
+  client_context?: {
+    screen?: string;
+    platform?: string;
+    route?: string;
+    room_id?: string;
+    building_id?: string;
+    booking_id?: string;
+    timezone?: string;
+  };
   user: {
     display_name: string;
     role: string;
@@ -37,7 +45,15 @@ export type SessionBrief = {
 
 export async function buildSessionBrief(
   ctx: AiUserContext,
-  clientContext?: { screen?: string; platform?: string }
+  clientContext?: {
+    screen?: string;
+    platform?: string;
+    route?: string;
+    room_id?: string;
+    building_id?: string;
+    booking_id?: string;
+    timezone?: string;
+  }
 ): Promise<SessionBrief> {
   const [user, ay] = await Promise.all([
     prisma.user.findUnique({
@@ -113,12 +129,16 @@ export function buildCampusAssistantSystemPrompt(): string {
     '',
     '## Data rules',
     '- Use tools for timetables, room search, notifications, and detailed lists. Never invent room numbers, times, or policies.',
+    '- For building questions (for example "free room in Gion"), resolve building first, then fetch rooms in that building.',
+    '- For availability questions, always ground answers in a concrete time window. If missing, ask one short clarification.',
+    '- Never claim a room is free unless a data-backed availability check was performed.',
     '- If tools return empty data, say so plainly and suggest what the user could do in the app (e.g. open Schedule or Explore).',
     '- Do not mention raw tool names to the user; say what you looked up in natural language.',
     '- Internal UUIDs: only share when the user needs them for admin or support.',
     '',
     '## Policy (also in session JSON)',
     '- Explain cutoff and reminders in plain language using the numbers from the session snapshot.',
+    '- Use timezone Africa/Addis_Ababa when users ask "today", "now", or date-bound questions.',
     '',
     '## Privacy',
     '- Do not expose other users\' email addresses. Names and student IDs visible through the user\'s own bookings list are fine within that visibility scope.',

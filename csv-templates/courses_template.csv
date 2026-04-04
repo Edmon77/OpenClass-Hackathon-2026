@@ -1,3 +1,11 @@
-course_name,course_code
-Database Systems,CS401
-Software Engineering,CS402
+course_name,faculty,department,year,section,teacher_id,course_code
+Database Systems,Faculty of Computing,Software Engineering,5,S1,TCH001,CS401
+Software Engineering,Faculty of Computing,Software Engineering,5,S1,TCH002,CS402
+Data Structures and Algorithms,Faculty of Computing,Software Engineering,5,S1,TCH003,CS403
+Web Application Development,Faculty of Computing,Software Engineering,5,S1,TCH004,CS404
+Computer Networks,Faculty of Computing,Software Engineering,5,S1,TCH005,CS405
+Operating Systems,Faculty of Computing,Software Engineering,5,S1,TCH006,CS406
+Introduction to Artificial Intelligence,Faculty of Computing,Software Engineering,5,S1,TCH007,CS407
+Cyber Security Fundamentals,Faculty of Computing,Software Engineering,5,S1,TCH008,CS408
+Software Quality Assurance,Faculty of Computing,Software Engineering,5,S1,TCH009,CS409
+Capstone Project I,Faculty of Computing,Software Engineering,5,S1,TCH010,CS410
