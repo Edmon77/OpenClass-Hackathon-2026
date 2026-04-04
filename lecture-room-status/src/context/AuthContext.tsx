@@ -87,15 +87,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 25_000);
+        const sid = loginId.trim().toUpperCase();
+        const pwRaw = password.trim();
+        const pw =
+          typeof pwRaw.normalize === 'function' ? pwRaw.normalize('NFKC') : pwRaw;
         const res = await fetch(`${base}/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ studentId: loginId.trim().toUpperCase(), password }),
+          body: JSON.stringify({ studentId: sid, password: pw }),
           signal: controller.signal,
         });
         clearTimeout(timer);
         const text = await res.text();
-        let data: { accessToken?: string; user?: AuthUser; error?: string };
+        let data: { accessToken?: string; user?: AuthUser; error?: string; code?: string; hint?: string };
         try {
           data = text ? (JSON.parse(text) as typeof data) : {};
         } catch {
@@ -105,7 +109,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           };
         }
         if (!res.ok) {
-          return { ok: false, error: data.error ?? 'Login failed' };
+          const extra =
+            data.code || data.hint
+              ? `\n\n${[data.code && `(${data.code})`, data.hint].filter(Boolean).join(' ')}`
+              : '';
+          return { ok: false, error: (data.error ?? 'Login failed') + extra };
         }
         if (!data.accessToken || !data.user) return { ok: false, error: 'Invalid response (no token)' };
         await setStoredToken(data.accessToken);

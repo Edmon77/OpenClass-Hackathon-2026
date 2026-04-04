@@ -7,7 +7,9 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from 'react-native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack, useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +19,7 @@ import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
 export default function ChangePasswordScreen() {
   const router = useRouter();
+  const headerHeight = useHeaderHeight();
   const { changePassword, user } = useAuth();
   const [p1, setP1] = useState('');
   const [p2, setP2] = useState('');
@@ -43,58 +46,77 @@ export default function ChangePasswordScreen() {
       <Stack.Screen options={{ title: 'New password', headerLargeTitle: false }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={headerHeight}
         style={styles.container}
       >
-        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="lock-closed" size={28} color={colors.campus} />
-          </View>
-          <Text style={styles.title}>Secure your account</Text>
-          <Text style={styles.hint}>Hello {user.name}. Choose a strong password.</Text>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(150).duration(400)}>
-          <View style={styles.inputGroup}>
-            <View style={styles.inputRow}>
-              <Ionicons name="key-outline" size={18} color={colors.tertiaryLabel} />
-              <TextInput
-                style={styles.input}
-                placeholder="New password"
-                placeholderTextColor={colors.tertiaryLabel}
-                secureTextEntry
-                value={p1}
-                onChangeText={setP1}
-              />
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentContainerStyle={styles.scrollContent}
+        >
+          <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+            <View style={styles.iconCircle}>
+              <Ionicons name="lock-closed" size={28} color={colors.campus} />
             </View>
-            <View style={styles.divider} />
-            <View style={styles.inputRow}>
-              <Ionicons name="checkmark-circle-outline" size={18} color={colors.tertiaryLabel} />
-              <TextInput
-                style={styles.input}
-                placeholder="Confirm password"
-                placeholderTextColor={colors.tertiaryLabel}
-                secureTextEntry
-                value={p2}
-                onChangeText={setP2}
-              />
-            </View>
-          </View>
+            <Text style={styles.title}>Secure your account</Text>
+            <Text style={styles.hint}>Hello {user.name}. Choose a strong password.</Text>
+          </Animated.View>
 
-          <PrimaryButton
-            title={busy ? 'Saving…' : 'Save and continue'}
-            onPress={onSave}
-            loading={busy}
-            disabled={busy}
-            style={{ marginTop: space.lg }}
-          />
-        </Animated.View>
+          <Animated.View entering={FadeInDown.delay(150).duration(400)}>
+            <View style={styles.inputGroup}>
+              <View style={styles.inputRow}>
+                <Ionicons name="key-outline" size={18} color={colors.tertiaryLabel} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="New password"
+                  placeholderTextColor={colors.tertiaryLabel}
+                  secureTextEntry
+                  value={p1}
+                  onChangeText={setP1}
+                  returnKeyType="next"
+                />
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.inputRow}>
+                <Ionicons name="checkmark-circle-outline" size={18} color={colors.tertiaryLabel} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Confirm password"
+                  placeholderTextColor={colors.tertiaryLabel}
+                  secureTextEntry
+                  value={p2}
+                  onChangeText={setP2}
+                  returnKeyType="go"
+                  onSubmitEditing={() => void onSave()}
+                />
+              </View>
+            </View>
+
+            <PrimaryButton
+              title={busy ? 'Saving…' : 'Save and continue'}
+              onPress={onSave}
+              loading={busy}
+              disabled={busy}
+              style={{ marginTop: space.lg }}
+            />
+          </Animated.View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: space.xl, justifyContent: 'center', backgroundColor: colors.groupedBackground },
+  container: { flex: 1, backgroundColor: colors.groupedBackground },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
+    paddingBottom: space.xxl,
+  },
   header: { alignItems: 'center', marginBottom: space.xl },
   iconCircle: {
     width: 64,

@@ -18,4 +18,4 @@ ENV NODE_ENV=production
 EXPOSE 3000
 # Use db push until you add migrations (run `npx prisma migrate dev` locally, commit prisma/migrations/, then switch to `migrate deploy`).
 # Seed is idempotent (upserts); ensures demo users exist on fresh volumes (see prisma/seed.ts).
-CMD ["sh", "-c", "npx prisma db push && npx prisma db seed && node dist/index.js"]
+CMD ["sh", "-c", "npx prisma db push && npx prisma db seed && node prisma/ensure-demo-campus.mjs && node prisma/ensure-demo-schedule.mjs && node prisma/reset-demo-passwords.mjs && node dist/index.js"]

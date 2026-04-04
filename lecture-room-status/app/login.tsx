@@ -8,7 +8,9 @@ import {
   Platform,
   Alert,
   Pressable,
+  ScrollView,
 } from 'react-native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack, useRouter } from 'expo-router';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +22,7 @@ import { colors, radius, space, shadows, type } from '@/src/theme/tokens';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const headerHeight = useHeaderHeight();
   const { login } = useAuth();
   const [id, setId] = useState('');
   const [password, setPassword] = useState('');
@@ -60,74 +63,86 @@ export default function LoginScreen() {
     <>
       <Stack.Screen options={{ title: 'Sign in', headerLargeTitle: false }} />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={headerHeight}
       >
-        <Animated.View entering={FadeIn.duration(600)} style={styles.brand}>
-          <View style={styles.brandCircle}>
-            <Ionicons name="school" size={36} color={colors.campus} />
-          </View>
-          <Text style={styles.title}>Lecture Rooms</Text>
-          <Text style={styles.tagline}>Live campus availability & booking</Text>
-        </Animated.View>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentContainerStyle={styles.scrollContent}
+        >
+          <Animated.View entering={FadeIn.duration(600)} style={styles.brand}>
+            <View style={styles.brandCircle}>
+              <Ionicons name="school" size={36} color={colors.campus} />
+            </View>
+            <Text style={styles.title}>Lecture Rooms</Text>
+            <Text style={styles.tagline}>Live campus availability & booking</Text>
+          </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(200).duration(500)}>
-          <Text style={styles.hint}>University ID and password</Text>
-          {!!getApiBaseUrl() && (
-            <>
-              <Text style={styles.apiUrl} selectable numberOfLines={2}>
-                {getApiBaseUrl()}
-              </Text>
-              {Platform.OS !== 'web' && /localhost|127\.0\.0\.1/i.test(getApiBaseUrl()) && (
-                <Text style={styles.warn}>
-                  localhost here points at this device, not your PC. Use your computer&apos;s LAN IP (e.g. same as Metro: 192.168.x.x) plus :3000. Android emulator: 10.0.2.2:3000.
+          <Animated.View entering={FadeInDown.delay(200).duration(500)}>
+            <Text style={styles.hint}>University ID and password</Text>
+            {!!getApiBaseUrl() && (
+              <>
+                <Text style={styles.apiUrl} selectable numberOfLines={2}>
+                  {getApiBaseUrl()}
                 </Text>
-              )}
-              {isApiConfigured() && (
-                <Pressable onPress={onTestConnection} disabled={testing} style={({ pressed }) => [styles.testBtn, pressed && { opacity: 0.7 }]}>
-                  <Text style={styles.testBtnTxt}>{testing ? 'Testing…' : 'Test API connection'}</Text>
-                </Pressable>
-              )}
-            </>
-          )}
-          <View style={styles.inputGroup}>
-            <View style={styles.inputRow}>
-              <Ionicons name="person-outline" size={18} color={colors.tertiaryLabel} />
-              <TextInput
-                style={styles.input}
-                placeholder="User ID"
-                placeholderTextColor={colors.tertiaryLabel}
-                autoCapitalize="characters"
-                value={id}
-                onChangeText={setId}
-              />
+                {Platform.OS !== 'web' && /localhost|127\.0\.0\.1/i.test(getApiBaseUrl()) && (
+                  <Text style={styles.warn}>
+                    localhost here points at this device, not your PC. Use your computer&apos;s LAN IP (e.g. same as Metro: 192.168.x.x) plus :3000. Android emulator: 10.0.2.2:3000.
+                  </Text>
+                )}
+                {isApiConfigured() && (
+                  <Pressable onPress={onTestConnection} disabled={testing} style={({ pressed }) => [styles.testBtn, pressed && { opacity: 0.7 }]}>
+                    <Text style={styles.testBtnTxt}>{testing ? 'Testing…' : 'Test API connection'}</Text>
+                  </Pressable>
+                )}
+              </>
+            )}
+            <View style={styles.inputGroup}>
+              <View style={styles.inputRow}>
+                <Ionicons name="person-outline" size={18} color={colors.tertiaryLabel} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="User ID"
+                  placeholderTextColor={colors.tertiaryLabel}
+                  autoCapitalize="characters"
+                  value={id}
+                  onChangeText={setId}
+                  returnKeyType="next"
+                />
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.inputRow}>
+                <Ionicons name="lock-closed-outline" size={18} color={colors.tertiaryLabel} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password"
+                  placeholderTextColor={colors.tertiaryLabel}
+                  secureTextEntry
+                  value={password}
+                  onChangeText={setPassword}
+                  returnKeyType="go"
+                  onSubmitEditing={() => void onSubmit()}
+                />
+              </View>
             </View>
-            <View style={styles.divider} />
-            <View style={styles.inputRow}>
-              <Ionicons name="lock-closed-outline" size={18} color={colors.tertiaryLabel} />
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor={colors.tertiaryLabel}
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-              />
-            </View>
-          </View>
 
-          <PrimaryButton
-            title={busy ? 'Signing in…' : 'Continue'}
-            onPress={onSubmit}
-            loading={busy}
-            disabled={busy}
-            style={{ marginTop: space.lg }}
-          />
+            <PrimaryButton
+              title={busy ? 'Signing in…' : 'Continue'}
+              onPress={onSubmit}
+              loading={busy}
+              disabled={busy}
+              style={{ marginTop: space.lg }}
+            />
 
-          <Text style={styles.seed}>
-            Demo: ADMIN001 / admin123 · STU001 / 123456
-          </Text>
-        </Animated.View>
+            <Text style={styles.seed}>
+              Demo: ADMIN001 / admin123 · STU001 / 123456
+            </Text>
+          </Animated.View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </>
   );
@@ -136,9 +151,14 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: space.xl,
-    justifyContent: 'center',
     backgroundColor: colors.groupedBackground,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: space.xl,
+    paddingVertical: space.lg,
+    paddingBottom: space.xxl,
   },
   brand: { alignItems: 'center', marginBottom: space.xxl },
   brandCircle: {

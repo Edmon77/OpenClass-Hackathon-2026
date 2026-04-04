@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, usePathname, useRouter } from 'expo-router';
@@ -79,6 +80,7 @@ export default function AssistantScreen() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ q?: string | string[] }>();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
   const pathname = usePathname();
   const [input, setInput] = useState('');
@@ -347,7 +349,7 @@ export default function AssistantScreen() {
     <KeyboardAvoidingView
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={insets.top + 56}
+      keyboardVerticalOffset={headerHeight}
     >
       <View style={styles.toolbar}>
         <Pressable onPress={clearThread} style={styles.toolbarBtn} hitSlop={12}>
@@ -358,9 +360,12 @@ export default function AssistantScreen() {
 
       <FlatList
         ref={listRef}
+        style={styles.listFlex}
         data={messages}
         keyExtractor={(item) => item.id}
         contentContainerStyle={[styles.listContent, { paddingBottom: space.md }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         ListFooterComponent={
           loading ? (
@@ -451,6 +456,7 @@ export default function AssistantScreen() {
           editable={!loading}
           multiline
           maxLength={4000}
+          blurOnSubmit={false}
           onSubmitEditing={() => void onSend()}
         />
         <Pressable
@@ -469,6 +475,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.groupedBackground,
+  },
+  listFlex: {
+    flex: 1,
   },
   toolbar: {
     flexDirection: 'row',

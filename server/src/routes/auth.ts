@@ -50,18 +50,51 @@ function mapUser(
   };
 }
 
+function normalizePasswordInput(p: string): string {
+  const t = p.trim();
+  try {
+    return t.normalize('NFKC');
+  } catch {
+    return t;
+  }
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/login', async (request, reply) => {
     const parsed = loginBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
     const studentId = parsed.data.studentId.trim().toUpperCase();
-    const user = await prisma.user.findFirst({
-      where: { studentId, isActive: true },
+    const password = normalizePasswordInput(parsed.data.password);
+
+    const user = await prisma.user.findUnique({
+      where: { studentId },
       include: { faculty: true, department: true },
     });
-    if (!user) return reply.status(401).send({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
-    if (!ok) return reply.status(401).send({ error: 'Invalid credentials' });
+    if (!user) {
+      request.log.warn({ studentId }, 'login_failed_unknown_user');
+      return reply.status(401).send({
+        error: 'Invalid credentials',
+        code: 'unknown_user',
+        hint: 'No account with this ID. Run prisma db seed (or docker compose up so seed runs).',
+      });
+    }
+    if (!user.isActive) {
+      request.log.warn({ studentId }, 'login_failed_inactive');
+      return reply.status(403).send({
+        error: 'Account is disabled',
+        code: 'inactive',
+        hint: 'Ask an admin to re-activate this user.',
+      });
+    }
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      request.log.warn({ studentId }, 'login_failed_bad_password');
+      return reply.status(401).send({
+        error: 'Invalid credentials',
+        code: 'bad_password',
+        hint: 'Check password spelling (demo: Hackathon2026).',
+      });
+    }
 
     const token = await app.jwt.sign({ sub: user.id, role: user.role });
     return {
