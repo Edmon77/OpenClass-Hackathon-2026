@@ -4,19 +4,55 @@ import { BookingStatus, EventType } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { AppError, ROOM_SLOT_CONFLICT } from '../lib/errors.js';
 import { createNotificationsForBooking, onBookingCancelled } from '../lib/bookingNotifications.js';
+import { replyInvalidBody } from '../lib/zodHttp.js';
+import { prismaStringId } from '../lib/zodPrisma.js';
 
 const EVENT_TYPES = ['lecture', 'exam', 'tutor', 'defense', 'lab', 'presentation'] as const;
 const TEACHER_EVENT_TYPES: readonly string[] = ['lecture', 'tutor', 'exam', 'lab', 'presentation'];
 const CR_EVENT_TYPES: readonly string[] = ['lecture', 'presentation', 'lab'];
 
-const createBody = z.object({
-  roomId: z.string().uuid(),
-  courseOfferingId: z.string().uuid(),
-  startTime: z.string().datetime({ precision: 3 }),
-  endTime: z.string().datetime({ precision: 3 }),
-  eventType: z.enum(EVENT_TYPES).optional(),
-  nextBookingPreference: z.boolean().optional(),
-});
+/** Accepts any ISO-like string Date.parse handles (Zod's datetime({ precision: 3 }) rejects e.g. ...Z with no ms). */
+const isoDateTime = z.string().refine((s) => !Number.isNaN(Date.parse(s)), { message: 'Invalid datetime' });
+
+function normalizeCreateBookingBody(val: unknown): unknown {
+  if (!val || typeof val !== 'object' || Array.isArray(val)) return val;
+  const o = val as Record<string, unknown>;
+  const rawRoom = o.roomId ?? o.room_id;
+  const roomId = typeof rawRoom === 'string' ? rawRoom.trim() : rawRoom;
+  const rawOff = o.courseOfferingId ?? o.course_offering_id;
+  const courseOfferingId = typeof rawOff === 'string' ? rawOff.trim() : rawOff;
+  const startTime = o.startTime ?? o.start_time;
+  const endTime = o.endTime ?? o.end_time;
+  let eventType = o.eventType ?? o.event_type;
+  if (typeof eventType === 'string') eventType = eventType.toLowerCase().trim();
+  let nextBookingPreference = o.nextBookingPreference ?? o.next_booking_preference;
+  if (nextBookingPreference == null) nextBookingPreference = undefined;
+  else if (typeof nextBookingPreference === 'string') {
+    nextBookingPreference = nextBookingPreference === 'true' || nextBookingPreference === '1';
+  } else if (typeof nextBookingPreference === 'number') {
+    nextBookingPreference = nextBookingPreference !== 0;
+  }
+  return {
+    roomId,
+    courseOfferingId,
+    startTime,
+    endTime,
+    eventType,
+    nextBookingPreference,
+  };
+}
+
+const createBody = z.preprocess(
+  normalizeCreateBookingBody,
+  z.object({
+    roomId: prismaStringId,
+    courseOfferingId: prismaStringId,
+    startTime: isoDateTime,
+    endTime: isoDateTime,
+    eventType: z.enum(EVENT_TYPES).optional(),
+    nextBookingPreference: z.boolean().optional(),
+  })
+);
 
 async function assertNoOverlap(roomId: string, start: Date, end: Date, excludeId?: string) {
   const clash = await prisma.booking.findFirst({
@@ -136,13 +172,16 @@ export const bookingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = createBody.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    if (!parsed.success) return replyInvalidBody(reply, parsed.error);
     const userId = (request.user as { sub: string }).sub;
     const role = (request.user as { role: string }).role;
 
     const start = new Date(parsed.data.startTime);
     const end = new Date(parsed.data.endTime);
     if (end <= start) return reply.status(400).send({ error: 'endTime must be after startTime' });
+    if (start.getTime() < Date.now()) {
+      return reply.status(400).send({ error: 'startTime cannot be in the past' });
+    }
 
     const offering = await prisma.courseOffering.findFirst({
       where: { id: parsed.data.courseOfferingId, isActive: true },

@@ -2,13 +2,17 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AlertSubscriptionStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { replyInvalidBody } from '../lib/zodHttp.js';
+import { prismaStringId } from '../lib/zodPrisma.js';
 
 const subscribeBody = z.preprocess(
   (val) => {
     if (val && typeof val === 'object' && !Array.isArray(val)) {
       const o = val as Record<string, unknown>;
       const rid = o.roomId ?? o.room_id;
-      const nbm = o.notifyBeforeMinutes ?? o.notify_before_minutes;
+      let nbm = o.notifyBeforeMinutes ?? o.notify_before_minutes;
+      // JSON.stringify(NaN) → null, which breaks z.coerce.number()
+      if (nbm === null || nbm === undefined || nbm === '') nbm = undefined;
       return {
         roomId: Array.isArray(rid) ? rid[0] : rid,
         notifyBeforeMinutes: nbm,
@@ -17,7 +21,7 @@ const subscribeBody = z.preprocess(
     return val;
   },
   z.object({
-    roomId: z.string().uuid(),
+    roomId: prismaStringId,
     notifyBeforeMinutes: z.coerce.number().int().min(1).max(120).optional(),
   })
 );
@@ -58,7 +62,7 @@ export const roomAlertsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = subscribeBody.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    if (!parsed.success) return replyInvalidBody(reply, parsed.error);
     const userId = (request.user as { sub: string }).sub;
     const now = new Date();
     await prisma.roomAlertSubscription.updateMany({

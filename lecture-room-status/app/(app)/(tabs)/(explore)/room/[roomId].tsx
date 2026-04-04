@@ -10,7 +10,7 @@ import {
   Platform,
   Switch,
 } from 'react-native';
-import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter, useFocusEffect, Stack } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -71,6 +71,73 @@ function heroConfig(ui: 'green' | 'yellow' | 'red') {
   return { accent: colors.statusBusy, title: 'In session', sub: 'Reserved for class', icon: 'lock-closed' as const };
 }
 
+const SLOT_STEP_MS = 15 * 60 * 1000;
+/** Initial gap between start and end when opening the form; user changes end freely in the pickers. */
+const INITIAL_END_AFTER_START_MS = 30 * 60 * 1000;
+
+function roundUpToStep(ms: number, step: number): number {
+  return Math.ceil(ms / step) * step;
+}
+
+function normalizeBookedIntervals(bookedBlocks: { start_time: string; end_time: string; status: string }[]) {
+  return bookedBlocks
+    .filter((b) => String(b.status).toLowerCase() === 'booked')
+    .map((b) => ({ s: new Date(b.start_time).getTime(), e: new Date(b.end_time).getTime() }))
+    .filter((x) => Number.isFinite(x.s) && Number.isFinite(x.e))
+    .sort((a, b) => a.s - b.s);
+}
+
+/**
+ * Next 15‑min grid instant that is not inside an existing booking (start may equal a booking’s end time).
+ * Does not assume how long the new booking lasts — user sets end in the UI.
+ */
+function suggestNextStart(bookedBlocks: { start_time: string; end_time: string; status: string }[]): Date {
+  const intervals = normalizeBookedIntervals(bookedBlocks);
+  let t = roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS);
+
+  for (let guard = 0; guard < 5000; guard++) {
+    const inside = intervals.find((iv) => t >= iv.s && t < iv.e);
+    if (!inside) return new Date(t);
+    t = roundUpToStep(inside.e, SLOT_STEP_MS);
+  }
+
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(9, 0, 0, 0);
+  return d;
+}
+
+function mergeDateKeepingTime(base: Date, newDate: Date): Date {
+  const d = new Date(base);
+  d.setFullYear(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+  return d;
+}
+
+function mergeTimeKeepingDate(base: Date, newTime: Date): Date {
+  const d = new Date(base);
+  d.setHours(newTime.getHours(), newTime.getMinutes(), 0, 0);
+  return d;
+}
+
+/** Earliest allowed booking start: slightly after now, snapped to the slot grid. */
+function minBookingStartMs(): number {
+  return roundUpToStep(Date.now() + 60 * 1000, SLOT_STEP_MS);
+}
+
+function clampStartNotInPast(d: Date): Date {
+  const minMs = minBookingStartMs();
+  return d.getTime() >= minMs ? d : new Date(minMs);
+}
+
+function bookingOverlapsExisting(startMs: number, endMs: number, list: { start_time: string; end_time: string; status: string }[]): boolean {
+  return list.some(
+    (b) =>
+      String(b.status).toLowerCase() === 'booked' &&
+      new Date(b.start_time).getTime() < endMs &&
+      new Date(b.end_time).getTime() > startMs
+  );
+}
+
 export default function RoomDetailScreen() {
   const rawRoomId = useLocalSearchParams<{ roomId: string | string[] }>().roomId;
   const roomId = useMemo(
@@ -92,17 +159,18 @@ export default function RoomDetailScreen() {
   const [canBook, setCanBook] = useState(false);
   const [modal, setModal] = useState(false);
   const [courseOfferingId, setCourseOfferingId] = useState<string | null>(null);
-  const [start, setStart] = useState(new Date());
-  const [end, setEnd] = useState(new Date(Date.now() + 2 * 3600000));
-  const [showStart, setShowStart] = useState(false);
-  const [showEnd, setShowEnd] = useState(false);
+  const [start, setStart] = useState(() => {
+    const t = roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS);
+    return new Date(t);
+  });
+  const [end, setEnd] = useState(() => new Date(roundUpToStep(Date.now() + 5 * 60 * 1000, SLOT_STEP_MS) + INITIAL_END_AFTER_START_MS));
   const [eventType, setEventType] = useState<EvType>('lecture');
   const [preferNextSlot, setPreferNextSlot] = useState(false);
   const [serverAlertId, setServerAlertId] = useState<string | null>(null);
   const [serverAlertExpires, setServerAlertExpires] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
-    if (!isApiConfigured() || !roomId) return;
+  const load = useCallback(async (): Promise<Bk[] | null> => {
+    if (!isApiConfigured() || !roomId) return null;
     const data = await apiFetch<{
       room: { room_number: string; floor_index: number; capacity: number; equipment_json: string | null; building_name: string };
       bookings: Bk[];
@@ -135,6 +203,8 @@ export default function RoomDetailScreen() {
       setServerAlertId(hit?.id ?? null);
       setServerAlertExpires(hit ? new Date(hit.expires_at).getTime() : null);
     } catch { setServerAlertId(null); setServerAlertExpires(null); }
+
+    return data.bookings;
   }, [roomId, user?.role]);
 
   useFocusEffect(useCallback(() => { load().catch(() => {}); refresh(); }, [load, refresh]));
@@ -148,29 +218,65 @@ export default function RoomDetailScreen() {
   const cutoffIso = next ? getTemporaryUseCutoffIso(next.start_time, cutoffMinutes) : null;
   const alertExpiresMs = alert?.expiresAt ?? serverAlertExpires ?? null;
 
-  async function openDatePicker(field: 'start' | 'end') {
-    if (Platform.OS === 'android') {
-      const current = field === 'start' ? start : end;
-      try {
-        const { action, year, month, day } = await (DateTimePickerAndroid as any).open({ value: current, mode: 'date' });
-        if (action === 'dismissedAction') return;
-        const { action: ta, hours, minutes } = await (DateTimePickerAndroid as any).open({ value: current, mode: 'time', is24Hour: true });
-        if (ta === 'dismissedAction') return;
-        const picked = new Date(year, month, day, hours, minutes);
-        if (field === 'start') setStart(picked); else setEnd(picked);
-      } catch { /* user cancelled */ }
-    } else {
-      if (field === 'start') setShowStart(!showStart); else setShowEnd(!showEnd);
-    }
+  const applyStart = useCallback((next: Date) => {
+    const c = clampStartNotInPast(next);
+    setStart(c);
+    setEnd((e) => (e.getTime() <= c.getTime() ? new Date(c.getTime() + INITIAL_END_AFTER_START_MS) : e));
+  }, []);
+
+  const openBookingModal = useCallback(async () => {
+    const fresh = await load().catch(() => null);
+    const list = fresh ?? bookings;
+    const booked = list.filter((b) => String(b.status).toLowerCase() === 'booked');
+    const s = clampStartNotInPast(suggestNextStart(booked));
+    setStart(s);
+    setEnd(new Date(s.getTime() + INITIAL_END_AFTER_START_MS));
+    setModal(true);
+  }, [load, bookings]);
+
+  const applyNextFreeSlot = useCallback(() => {
+    const booked = bookings.filter((b) => String(b.status).toLowerCase() === 'booked');
+    const s = clampStartNotInPast(suggestNextStart(booked));
+    const dur = Math.max(end.getTime() - start.getTime(), INITIAL_END_AFTER_START_MS);
+    setStart(s);
+    setEnd(new Date(s.getTime() + dur));
+  }, [bookings, end, start]);
+
+  function onPickerEventOk(event: DateTimePickerEvent): boolean {
+    if (event.type === 'dismissed') return false;
+    return true;
   }
 
   async function onCreateBooking() {
     if (!user || !courseOfferingId) return;
+    const rid = typeof roomId === 'string' ? roomId.trim() : '';
+    if (!rid) {
+      Alert.alert('Error', 'Missing room id. Go back and open the room again.');
+      return;
+    }
+    const sMs = start.getTime();
+    const eMs = end.getTime();
+    if (!Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) {
+      Alert.alert('Invalid times', 'End time must be after start time.');
+      return;
+    }
+    if (sMs < Date.now()) {
+      Alert.alert('Invalid start', 'Choose a start time in the future.');
+      return;
+    }
+    const booked = bookings.filter((b) => String(b.status).toLowerCase() === 'booked');
+    if (bookingOverlapsExisting(sMs, eMs, booked)) {
+      Alert.alert(
+        'That time is taken',
+        'This overlaps another booking in this room. Tap “Next free start” or change start and end below.'
+      );
+      return;
+    }
     try {
       await apiFetch('/bookings', {
         method: 'POST',
         json: {
-          roomId,
+          roomId: rid,
           courseOfferingId,
           eventType,
           startTime: start.toISOString(),
@@ -198,10 +304,27 @@ export default function RoomDetailScreen() {
 
   async function subscribeRoomAlert() {
     if (!user) return;
-    const cm = cutoffMinutes;
-    const nextBk = bookings.filter((b) => b.status === 'booked' && new Date(b.start_time) > new Date()).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+    const rid = typeof roomId === 'string' ? roomId.trim() : '';
+    if (!rid) {
+      Alert.alert('Error', 'Missing room id. Go back and open the room again.');
+      return;
+    }
+    const cmRaw = Number(cutoffMinutes);
+    const cm = Number.isFinite(cmRaw) ? Math.min(120, Math.max(1, Math.round(cmRaw))) : 10;
+    const fresh = await load();
+    if (!fresh) {
+      Alert.alert('Error', 'Could not load this room’s schedule. Try again.');
+      return;
+    }
+    const nowMs = Date.now();
+    const nextBk = fresh
+      .filter((b) => b.status === 'booked' && new Date(b.start_time).getTime() > nowMs)
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
     try {
-      const created = await apiFetch<{ subscription: { id: string; expires_at: string } }>('/room-alerts', { method: 'POST', json: { roomId, notifyBeforeMinutes: cm } });
+      const created = await apiFetch<{ subscription: { id: string; expires_at: string } }>('/room-alerts', {
+        method: 'POST',
+        json: { roomId: rid, notifyBeforeMinutes: cm },
+      });
       setServerAlertId(created.subscription.id);
       setServerAlertExpires(new Date(created.subscription.expires_at).getTime());
       await persistAfterSubscribe();
@@ -211,7 +334,10 @@ export default function RoomDetailScreen() {
         await scheduleRoomNeededAlert(roomNum, triggerAt, cm);
         Alert.alert('Alert active', 'Local reminder + server subscription (2h).');
       } else {
-        Alert.alert('Alert active', 'No upcoming booking. Subscription expires in 2h.');
+        Alert.alert(
+          'Alert active',
+          'Subscribed for 2h on the server. No future class start is scheduled for this room—add a booking with a future start time, then tap Notify me again for a local reminder.'
+        );
       }
     } catch (e) { Alert.alert('Error', String(e)); }
   }
@@ -300,7 +426,7 @@ export default function RoomDetailScreen() {
         {/* Actions */}
         <View style={styles.actionsRow}>
           {canBook && (
-            <PrimaryButton title="Book this room" onPress={() => setModal(true)} style={{ flex: 1 }} />
+            <PrimaryButton title="Book this room" onPress={openBookingModal} style={{ flex: 1 }} />
           )}
           <SecondaryButton title="Notify me" onPress={subscribeRoomAlert} style={{ flex: canBook ? 1 : undefined }} />
         </View>
@@ -355,57 +481,150 @@ export default function RoomDetailScreen() {
         <View style={styles.modalOverlay}>
           <Pressable style={styles.modalDismiss} onPress={() => setModal(false)} />
           <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>New booking</Text>
-
-            <SectionHeader title="Course" style={{ marginTop: space.sm }} />
-            {courses.map((c) => (
-              <Pressable key={c.id} onPress={() => setCourseOfferingId(c.id)} style={[styles.courseOpt, courseOfferingId === c.id && styles.courseOptOn]}>
-                <Text style={[styles.courseOptText, courseOfferingId === c.id && { color: colors.campus }]}>{c.course_name}</Text>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.modalScrollContent}
+              nestedScrollEnabled
+            >
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>New booking</Text>
+              <Text style={styles.modalHint}>
+                Choose start and end with the pickers below. Start must be in the future. We suggest the next free start and a 30-minute span — adjust the end for a longer or shorter booking.
+              </Text>
+              <Pressable onPress={applyNextFreeSlot} style={styles.linkChip}>
+                <Text style={styles.linkChipText}>Next free start</Text>
               </Pressable>
-            ))}
 
-            <SectionHeader title="Event type" />
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.sm }}>
-              <View style={styles.evRow}>
-                {getAllowedEventTypes(user?.role).map((ev) => (
-                  <Pressable key={ev} onPress={() => setEventType(ev)} style={[styles.evPill, eventType === ev && styles.evPillOn]}>
-                    <Text style={[styles.evPillText, eventType === ev && styles.evPillTextOn]}>{EVENT_LABELS[ev]}</Text>
-                  </Pressable>
-                ))}
+              <SectionHeader title="Course" style={{ marginTop: space.sm }} />
+              {courses.map((c) => (
+                <Pressable key={c.id} onPress={() => setCourseOfferingId(c.id)} style={[styles.courseOpt, courseOfferingId === c.id && styles.courseOptOn]}>
+                  <Text style={[styles.courseOptText, courseOfferingId === c.id && { color: colors.campus }]}>{c.course_name}</Text>
+                </Pressable>
+              ))}
+
+              <SectionHeader title="Event type" />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.sm }}>
+                <View style={styles.evRow}>
+                  {getAllowedEventTypes(user?.role).map((ev) => (
+                    <Pressable key={ev} onPress={() => setEventType(ev)} style={[styles.evPill, eventType === ev && styles.evPillOn]}>
+                      <Text style={[styles.evPillText, eventType === ev && styles.evPillTextOn]}>{EVENT_LABELS[ev]}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </ScrollView>
+
+              <SectionHeader title="Start" />
+              <View style={styles.datePicker}>
+                <Text style={styles.dateText}>{start.toLocaleString()}</Text>
+              </View>
+              {Platform.OS === 'ios' ? (
+                <DateTimePicker
+                  value={start}
+                  mode="datetime"
+                  display="spinner"
+                  minimumDate={new Date(minBookingStartMs())}
+                  onChange={(event, d) => {
+                    if (!onPickerEventOk(event) || !d) return;
+                    applyStart(d);
+                  }}
+                />
+              ) : (
+                <View style={styles.pickerCol}>
+                  <Text style={styles.pickerLabel}>Date</Text>
+                  <DateTimePicker
+                    value={start}
+                    mode="date"
+                    display="spinner"
+                    minimumDate={new Date(minBookingStartMs())}
+                    onChange={(event, d) => {
+                      if (!onPickerEventOk(event) || !d) return;
+                      setStart((prev) => {
+                        const next = clampStartNotInPast(mergeDateKeepingTime(prev, d));
+                        setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
+                        return next;
+                      });
+                    }}
+                    style={styles.pickerSpin}
+                  />
+                  <Text style={styles.pickerLabel}>Time</Text>
+                  <DateTimePicker
+                    value={start}
+                    mode="time"
+                    display="spinner"
+                    is24Hour
+                    onChange={(event, d) => {
+                      if (!onPickerEventOk(event) || !d) return;
+                      setStart((prev) => {
+                        const next = clampStartNotInPast(mergeTimeKeepingDate(prev, d));
+                        setEnd((e) => (e.getTime() <= next.getTime() ? new Date(next.getTime() + INITIAL_END_AFTER_START_MS) : e));
+                        return next;
+                      });
+                    }}
+                    style={styles.pickerSpin}
+                  />
+                </View>
+              )}
+
+              <SectionHeader title="End" />
+              <View style={styles.datePicker}>
+                <Text style={styles.dateText}>{end.toLocaleString()}</Text>
+              </View>
+              {Platform.OS === 'ios' ? (
+                <DateTimePicker
+                  value={end}
+                  mode="datetime"
+                  display="spinner"
+                  minimumDate={new Date(start.getTime() + 60 * 1000)}
+                  onChange={(event, d) => {
+                    if (!onPickerEventOk(event) || !d) return;
+                    setEnd(d);
+                  }}
+                />
+              ) : (
+                <View style={styles.pickerCol}>
+                  <Text style={styles.pickerLabel}>Date</Text>
+                  <DateTimePicker
+                    value={end}
+                    mode="date"
+                    display="spinner"
+                    minimumDate={new Date(start.getTime())}
+                    onChange={(event, d) => {
+                      if (!onPickerEventOk(event) || !d) return;
+                      setEnd((prev) => mergeDateKeepingTime(prev, d));
+                    }}
+                    style={styles.pickerSpin}
+                  />
+                  <Text style={styles.pickerLabel}>Time</Text>
+                  <DateTimePicker
+                    value={end}
+                    mode="time"
+                    display="spinner"
+                    is24Hour
+                    onChange={(event, d) => {
+                      if (!onPickerEventOk(event) || !d) return;
+                      setEnd((prev) => mergeTimeKeepingDate(prev, d));
+                    }}
+                    style={styles.pickerSpin}
+                  />
+                </View>
+              )}
+
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.switchLabel}>Prefer same room next slot</Text>
+                  <Text style={styles.switchHint}>Hint only — still checks conflicts.</Text>
+                </View>
+                <Switch value={preferNextSlot} onValueChange={setPreferNextSlot} trackColor={{ true: colors.campus }} />
+              </View>
+
+              <View style={styles.modalActions}>
+                <Pressable onPress={() => setModal(false)}>
+                  <Text style={styles.cancelLink}>Close</Text>
+                </Pressable>
+                <PrimaryButton title="Save booking" onPress={onCreateBooking} style={{ flex: 1, marginLeft: space.md }} />
               </View>
             </ScrollView>
-
-            <SectionHeader title="Start" />
-            <Pressable onPress={() => openDatePicker('start')} style={styles.datePicker}>
-              <Text style={styles.dateText}>{start.toLocaleString()}</Text>
-            </Pressable>
-            {showStart && Platform.OS === 'ios' && (
-              <DateTimePicker value={start} mode="datetime" display="spinner" onChange={(_, d) => { if (d) setStart(d); }} />
-            )}
-
-            <SectionHeader title="End" />
-            <Pressable onPress={() => openDatePicker('end')} style={styles.datePicker}>
-              <Text style={styles.dateText}>{end.toLocaleString()}</Text>
-            </Pressable>
-            {showEnd && Platform.OS === 'ios' && (
-              <DateTimePicker value={end} mode="datetime" display="spinner" onChange={(_, d) => { if (d) setEnd(d); }} />
-            )}
-
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.switchLabel}>Prefer same room next slot</Text>
-                <Text style={styles.switchHint}>Hint only — still checks conflicts.</Text>
-              </View>
-              <Switch value={preferNextSlot} onValueChange={setPreferNextSlot} trackColor={{ true: colors.campus }} />
-            </View>
-
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setModal(false)}>
-                <Text style={styles.cancelLink}>Close</Text>
-              </Pressable>
-              <PrimaryButton title="Save booking" onPress={onCreateBooking} style={{ flex: 1, marginLeft: space.md }} />
-            </View>
           </View>
         </View>
       </Modal>
@@ -515,12 +734,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.systemBackground,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    padding: space.xl,
-    paddingBottom: 40,
+    paddingHorizontal: space.xl,
+    paddingTop: space.md,
     maxHeight: '90%',
+    flexShrink: 1,
   },
   modalHandle: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.fill, alignSelf: 'center', marginBottom: space.md },
   modalTitle: { ...type.title2, color: colors.label },
+  modalScrollContent: { paddingBottom: space.xl },
+  modalHint: { ...type.footnote, color: colors.secondaryLabel, marginTop: space.sm },
+  linkChip: { alignSelf: 'flex-start', marginTop: space.sm, paddingVertical: space.xs, paddingHorizontal: space.sm },
+  linkChipText: { ...type.subhead, color: colors.campus, fontWeight: '600' },
   evRow: { flexDirection: 'row', gap: space.xs },
   evPill: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: colors.fill },
   evPillOn: { backgroundColor: colors.campus },
@@ -543,6 +767,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   dateText: { ...type.body, color: colors.label },
+  pickerCol: { marginTop: space.xs },
+  pickerLabel: { ...type.caption1, color: colors.secondaryLabel, marginTop: space.sm },
+  pickerSpin: { alignSelf: 'stretch', height: Platform.OS === 'android' ? 128 : undefined },
   switchRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.lg, gap: space.md },
   switchLabel: { ...type.subhead, color: colors.label, fontWeight: '600' },
   switchHint: { ...type.caption2, color: colors.tertiaryLabel, marginTop: 4 },

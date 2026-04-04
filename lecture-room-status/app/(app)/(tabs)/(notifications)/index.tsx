@@ -80,7 +80,7 @@ export default function NotificationsScreen() {
 
   async function markAllRead() {
     try {
-      await apiFetch('/notifications/read-all', { method: 'POST' });
+      await apiFetch('/notifications/read-all', { method: 'POST', json: {} });
       setRows((prev) => prev.map((r) => ({ ...r, is_read: true })));
     } catch {}
   }

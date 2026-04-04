@@ -1,11 +1,17 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { replyInvalidBody } from '../lib/zodHttp.js';
+
+const optionalNonEmptyTrimmed = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().min(1).optional()
+);
 
 const createOfferingBody = z.object({
   courseName: z.string().min(1),
-  courseCode: z.string().optional(),
-  teacherStudentId: z.string().min(1).optional(),
+  courseCode: optionalNonEmptyTrimmed,
+  teacherStudentId: optionalNonEmptyTrimmed,
 });
 
 export const coursesRoutes: FastifyPluginAsync = async (app) => {
@@ -173,16 +179,28 @@ export const coursesRoutes: FastifyPluginAsync = async (app) => {
 
   const updateOfferingBody = z.object({
     courseName: z.string().min(1).optional(),
-    courseCode: z.string().optional(),
-    teacherStudentId: z.string().min(1).optional(),
+    courseCode: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().optional()
+    ),
+    teacherStudentId: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional()
+    ),
   });
 
   app.put(
     '/offerings/:id/teacher',
     { preHandler: [app.authenticate] },
     async (request, reply) => {
-      const parsed = z.object({ teacherStudentId: z.string().min(1).nullable() }).safeParse(request.body);
-      if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+      const teacherAssignBody = z.object({
+        teacherStudentId: z.preprocess(
+          (v) => (v === '' ? null : v),
+          z.union([z.string().min(1), z.null()])
+        ),
+      });
+      const parsed = teacherAssignBody.safeParse(request.body);
+      if (!parsed.success) return replyInvalidBody(reply, parsed.error);
       const userId = (request.user as { sub: string }).sub;
       const role = (request.user as { role: string }).role;
 

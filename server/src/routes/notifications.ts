@@ -24,18 +24,19 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  /** Static path before /:id so "read-all" is never captured as an id. */
+  app.post('/read-all', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = (request.user as { sub: string }).sub;
+    await prisma.notification.updateMany({ where: { userId, isRead: false }, data: { isRead: true } });
+    return { ok: true };
+  });
+
   app.patch('/:id/read', { preHandler: [app.authenticate] }, async (request, reply) => {
     const userId = (request.user as { sub: string }).sub;
     const { id } = request.params as { id: string };
     const row = await prisma.notification.findFirst({ where: { id, userId } });
     if (!row) return reply.status(404).send({ error: 'Not found' });
     await prisma.notification.update({ where: { id }, data: { isRead: true } });
-    return { ok: true };
-  });
-
-  app.post('/read-all', { preHandler: [app.authenticate] }, async (request) => {
-    const userId = (request.user as { sub: string }).sub;
-    await prisma.notification.updateMany({ where: { userId, isRead: false }, data: { isRead: true } });
     return { ok: true };
   });
 };
