@@ -14,17 +14,46 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
 import { apiFetch } from '@/src/api/client';
 import { isApiConfigured } from '@/src/api/config';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { colors, radius, space, type } from '@/src/theme/tokens';
 
-type ChatTurn = { role: 'user' | 'assistant'; content: string };
+type SuggestedAction = {
+  type: 'confirm_proposal' | 'cancel_proposal' | 'open_room' | 'open_building' | 'open_bookings';
+  label: string;
+  payload: Record<string, unknown>;
+};
+
+type Proposal = {
+  proposal_id: string;
+  action: string;
+  summary: string;
+  expires_at: string;
+};
+
+type ChatTurn = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  failed?: boolean;
+  retry_text?: string;
+  actions?: SuggestedAction[];
+  proposal?: Proposal;
+};
 
 const STORAGE_KEY = 'campus_assistant_messages_v1';
 
-function suggestionChips(role: string): { label: string; text: string }[] {
+function suggestionChips(role: string, isCr: boolean): { label: string; text: string }[] {
+  if (role === 'student' && isCr) {
+    return [
+      { label: 'Cohort bookings', text: 'Show upcoming bookings for my class cohort this week.' },
+      { label: 'What can I book?', text: 'What event types and offerings can I book for as class representative?' },
+      { label: 'Free room now', text: 'Find free rooms in my campus now with capacity 40+' },
+    ];
+  }
   switch (role) {
     case 'admin':
       return [
@@ -50,12 +79,15 @@ function suggestionChips(role: string): { label: string; text: string }[] {
 export default function AssistantScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const pathname = usePathname();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const listRef = useRef<FlatList>(null);
+  const [isCr, setIsCr] = useState(false);
+  const listRef = useRef<FlatList<ChatTurn>>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,11 +96,14 @@ export default function AssistantScreen() {
         if (cancelled || !raw) return;
         try {
           const parsed = JSON.parse(raw) as unknown;
-          if (Array.isArray(parsed) && parsed.every((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))) {
+          if (
+            Array.isArray(parsed) &&
+            parsed.every((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+          ) {
             setMessages(parsed as ChatTurn[]);
           }
         } catch {
-          /* ignore */
+          // ignore invalid cache
         }
       })
       .finally(() => {
@@ -84,12 +119,79 @@ export default function AssistantScreen() {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(messages)).catch(() => {});
   }, [messages, hydrated]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function detectCr() {
+      if (!user || user.role !== 'student' || !isApiConfigured()) {
+        setIsCr(false);
+        return;
+      }
+      try {
+        const res = await apiFetch<{ courses: { id: string }[] }>('/courses/bookable', { timeoutMs: 20_000 });
+        if (!cancelled) setIsCr(res.courses.length > 0);
+      } catch {
+        if (!cancelled) setIsCr(false);
+      }
+    }
+    void detectCr();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  function makeId(prefix: string): string {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  async function handleSuggestedAction(action: SuggestedAction): Promise<void> {
+    if (action.type === 'confirm_proposal' || action.type === 'cancel_proposal') {
+      const proposalId = String(action.payload.proposal_id ?? '');
+      if (!proposalId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiFetch<{ ok: boolean; action?: string }>('/ai/confirm', {
+          method: 'POST',
+          json: {
+            proposal_id: proposalId,
+            confirmed: action.type === 'confirm_proposal',
+          },
+          timeoutMs: 30_000,
+        });
+        const text =
+          action.type === 'confirm_proposal'
+            ? `Confirmed.${res.action ? ` Action: ${res.action}.` : ''}`
+            : 'Proposal cancelled.';
+        setMessages((prev) => [...prev, { id: makeId('assistant'), role: 'assistant', content: text }]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Action failed');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (action.type === 'open_room') {
+      const roomId = String(action.payload.room_id ?? '');
+      if (roomId) router.push(`/(app)/(tabs)/(explore)/room/${roomId}`);
+      return;
+    }
+    if (action.type === 'open_building') {
+      const buildingId = String(action.payload.building_id ?? '');
+      if (buildingId) router.push(`/(app)/(tabs)/(explore)/building/${buildingId}`);
+      return;
+    }
+    if (action.type === 'open_bookings') {
+      router.push('/(app)/(tabs)/(schedule)/bookings');
+    }
+  }
+
   const sendMessage = useCallback(
     async (userText: string) => {
       const text = userText.trim();
       if (!text || loading) return;
 
-      const nextUser: ChatTurn = { role: 'user', content: text };
+      const nextUser: ChatTurn = { id: makeId('user'), role: 'user', content: text };
       const history = [...messages, nextUser];
       setMessages(history);
       setInput('');
@@ -97,28 +199,58 @@ export default function AssistantScreen() {
       setLoading(true);
 
       try {
-        const res = await apiFetch<{ message: { role: string; content: string } }>('/ai/chat', {
+        const roomMatch = pathname.match(/\/room\/([^/]+)/);
+        const buildingMatch = pathname.match(/\/building\/([^/]+)/);
+        const bookingMatch = pathname.match(/\/bookings\/([^/]+)/);
+        const res = await apiFetch<{
+          message: { role: string; content: string };
+          proposal?: Proposal;
+          suggested_actions?: SuggestedAction[];
+        }>('/ai/chat', {
           method: 'POST',
           json: {
             messages: history.map((m) => ({ role: m.role, content: m.content })),
             client_context: {
               screen: 'campus_assistant',
               platform: Platform.OS,
+              route: pathname,
+              room_id: roomMatch?.[1],
+              building_id: buildingMatch?.[1],
+              booking_id: bookingMatch?.[1],
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             },
           },
           timeoutMs: 120_000,
         });
         const reply = res.message?.content?.trim() ?? '';
-        setMessages((prev) => [...prev, { role: 'assistant', content: reply || '—' }]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: makeId('assistant'),
+            role: 'assistant',
+            content: reply || '—',
+            proposal: res.proposal,
+            actions: res.suggested_actions,
+          },
+        ]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Request failed';
         setError(msg);
-        setMessages((prev) => prev.slice(0, -1));
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: makeId('assistant'),
+            role: 'assistant',
+            content: `I could not complete that request: ${msg}`,
+            failed: true,
+            retry_text: text,
+          },
+        ]);
       } finally {
         setLoading(false);
       }
     },
-    [loading, messages]
+    [loading, messages, pathname]
   );
 
   const onSend = useCallback(() => void sendMessage(input), [input, sendMessage]);
@@ -133,7 +265,7 @@ export default function AssistantScreen() {
     return <EmptyState icon="cloud-offline-outline" title="Sign in required" subtitle="Configure API URL and sign in to use the assistant." />;
   }
 
-  const chips = suggestionChips(user.role);
+  const chips = suggestionChips(user.role, isCr);
 
   return (
     <KeyboardAvoidingView
@@ -151,23 +283,26 @@ export default function AssistantScreen() {
       <FlatList
         ref={listRef}
         data={messages}
-        keyExtractor={(_, i) => `${i}`}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={[styles.listContent, { paddingBottom: space.md }]}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        ListFooterComponent={
+          loading ? (
+            <View style={[styles.bubble, styles.bubbleAssistant, styles.thinkingBubble]}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.thinkingText}>Assistant is thinking...</Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.hintWrap}>
             <Text style={styles.hintTitle}>Campus Assistant</Text>
             <Text style={styles.hintBody}>
-              Ask about your schedule, bookable offerings, rooms, alerts, or policy. Answers use live data from your account.
+              Ask about your schedule, availability by building, bookable offerings, alerts, or policy. Answers use live data from your account.
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
               {chips.map((c) => (
-                <Pressable
-                  key={c.label}
-                  style={styles.chip}
-                  onPress={() => void sendMessage(c.text)}
-                  disabled={loading}
-                >
+                <Pressable key={c.label} style={styles.chip} onPress={() => void sendMessage(c.text)} disabled={loading}>
                   <Text style={styles.chipText}>{c.label}</Text>
                 </Pressable>
               ))}
@@ -175,15 +310,29 @@ export default function AssistantScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <View
-            style={[
-              styles.bubble,
-              item.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
-            ]}
-          >
-            <Text style={item.role === 'user' ? styles.bubbleTextUser : styles.bubbleTextAssistant}>
-              {item.content}
-            </Text>
+          <View style={[styles.bubble, item.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant]}>
+            <Text style={item.role === 'user' ? styles.bubbleTextUser : styles.bubbleTextAssistant}>{item.content}</Text>
+            {item.failed && item.retry_text ? (
+              <Pressable style={styles.actionBtn} onPress={() => void sendMessage(item.retry_text ?? '')} disabled={loading}>
+                <Text style={styles.actionBtnText}>Retry</Text>
+              </Pressable>
+            ) : null}
+            {item.proposal ? (
+              <View style={styles.proposalCard}>
+                <Text style={styles.proposalTitle}>Confirmation required</Text>
+                <Text style={styles.proposalText}>{item.proposal.summary}</Text>
+                <Text style={styles.proposalMeta}>Expires: {item.proposal.expires_at}</Text>
+              </View>
+            ) : null}
+            {item.actions?.length ? (
+              <View style={styles.actionsRow}>
+                {item.actions.map((a: SuggestedAction) => (
+                  <Pressable key={`${item.id}-${a.type}-${a.label}`} style={styles.actionBtn} onPress={() => void handleSuggestedAction(a)} disabled={loading}>
+                    <Text style={styles.actionBtnText}>{a.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
           </View>
         )}
       />
@@ -208,7 +357,7 @@ export default function AssistantScreen() {
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, space.sm) }]}>
         <TextInput
           style={styles.input}
-          placeholder="Ask a question…"
+          placeholder="Ask a question..."
           placeholderTextColor={colors.tertiaryLabel}
           value={input}
           onChangeText={setInput}
@@ -222,11 +371,7 @@ export default function AssistantScreen() {
           onPress={() => void onSend()}
           disabled={!input.trim() || loading}
         >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Ionicons name="arrow-up" size={22} color="#fff" />
-          )}
+          {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="arrow-up" size={22} color="#fff" />}
         </Pressable>
       </View>
     </KeyboardAvoidingView>
@@ -334,6 +479,53 @@ const styles = StyleSheet.create({
   bubbleTextAssistant: {
     ...type.body,
     color: colors.label,
+  },
+  thinkingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
+  thinkingText: {
+    ...type.footnote,
+    color: colors.secondaryLabel,
+  },
+  proposalCard: {
+    marginTop: space.sm,
+    padding: space.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.fill,
+  },
+  proposalTitle: {
+    ...type.caption1,
+    color: colors.label,
+    fontWeight: '700',
+  },
+  proposalText: {
+    ...type.footnote,
+    color: colors.label,
+    marginTop: 2,
+  },
+  proposalMeta: {
+    ...type.caption2,
+    color: colors.secondaryLabel,
+    marginTop: 2,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space.sm,
+    marginTop: space.sm,
+  },
+  actionBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentMuted,
+  },
+  actionBtnText: {
+    ...type.caption1,
+    color: colors.accent,
+    fontWeight: '700',
   },
   errorBanner: {
     flexDirection: 'row',
