@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply min-h-screen bg-app-page font-sans text-app-label antialiased;
+}
+
+@layer components {
+  .dash-content {
+    @apply mx-auto w-full max-w-7xl;
+  }
+}
+
+:focus-visible {
+  @apply outline-none ring-2 ring-app-accent/50 ring-offset-2 ring-offset-app-page;
+}
+
+/* Native selects: chevron contrast on light bg */
+select.app-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23636669'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 1rem;
+  padding-right: 2.25rem;
+  appearance: none;
+}
