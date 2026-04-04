@@ -988,6 +988,7 @@ async function proposeCreateBooking(ctx: AiUserContext, args: Record<string, unk
     return { error: 'room_id, course_offering_id, start_time, end_time required' };
   }
   if (end <= start) return { error: 'end_time must be after start_time' };
+  if (start.getTime() < Date.now()) return { error: 'start_time cannot be in the past' };
 
   const [room, offering] = await Promise.all([
     prisma.room.findFirst({ where: { id: roomId, isActive: true }, include: { building: true } }),
@@ -1159,6 +1160,9 @@ export async function confirmAssistantProposal(
     const end = new Date(payload.end_time);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
       return { ok: false, error: 'Invalid time range in proposal' };
+    }
+    if (start.getTime() < Date.now()) {
+      return { ok: false, error: 'start_time cannot be in the past' };
     }
     const clash = await prisma.booking.findFirst({
       where: {

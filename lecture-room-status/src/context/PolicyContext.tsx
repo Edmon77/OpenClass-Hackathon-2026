@@ -54,8 +54,12 @@ export function PolicyProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo<PolicyCtx>(() => {
-    const cm = policy?.cutoff_minutes_before_class ?? 10;
-    const ar = policy?.advance_reminder_hours ?? 24;
+    const rawCm = policy?.cutoff_minutes_before_class;
+    const rawAr = policy?.advance_reminder_hours;
+    const cm =
+      typeof rawCm === 'number' && Number.isFinite(rawCm) && rawCm > 0 ? Math.round(rawCm) : 10;
+    const ar =
+      typeof rawAr === 'number' && Number.isFinite(rawAr) && rawAr >= 0 ? Math.round(rawAr) : 24;
     return {
       policy,
       cutoffMinutes: cm,

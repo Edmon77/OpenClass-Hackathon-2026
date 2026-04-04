@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { Role, RoomType, type Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { replyInvalidBody } from '../lib/zodHttp.js';
 
 const createUserBody = z.object({
   studentId: z.string().min(1),
@@ -37,13 +38,28 @@ const roomBody = z.object({
   equipment: z.array(z.string()).optional(),
 });
 
-const crAssignBody = z.object({
-  userId: z.string().uuid(),
-  academicYearId: z.string().uuid(),
-  departmentId: z.string().uuid(),
-  year: z.number().int(),
-  section: z.string().nullable().optional(),
-});
+const crAssignBody = z.preprocess(
+  (val) => {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const o = val as Record<string, unknown>;
+      return {
+        userId: o.userId ?? o.user_id,
+        academicYearId: o.academicYearId ?? o.academic_year_id,
+        departmentId: o.departmentId ?? o.department_id,
+        year: o.year,
+        section: o.section,
+      };
+    }
+    return val;
+  },
+  z.object({
+    userId: z.string().uuid(),
+    academicYearId: z.string().uuid(),
+    departmentId: z.string().uuid(),
+    year: z.coerce.number().int(),
+    section: z.preprocess((v) => (v === '' ? null : v), z.string().nullable().optional()),
+  })
+);
 
 const facultyBody = z.object({ name: z.string().min(1) });
 const departmentBody = z.object({
@@ -410,7 +426,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   app.post('/cr-assignments', async (request, reply) => {
     if (!adminOr403(request, reply)) return;
     const parsed = crAssignBody.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: 'Invalid body' });
+    if (!parsed.success) return replyInvalidBody(reply, parsed.error);
     const d = parsed.data;
     const row = await prisma.crAssignment.create({
       data: {
