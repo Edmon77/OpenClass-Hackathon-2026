@@ -1,3 +1,11 @@
 course_code,faculty,department,year,section,teacher_id
-CS401,Faculty of Computing,Software Engineering,5,A,TCH001
-CS402,Faculty of Computing,Software Engineering,5,,
+CS401,Faculty of Computing,Software Engineering,5,S2,TCH004
+CS402,Faculty of Computing,Software Engineering,5,S2,TCH005
+CS403,Faculty of Computing,Software Engineering,5,S2,TCH006
+CS404,Faculty of Computing,Software Engineering,5,S2,TCH007
+CS405,Faculty of Computing,Software Engineering,5,S2,TCH008
+CS406,Faculty of Computing,Software Engineering,5,S2,TCH009
+CS407,Faculty of Computing,Software Engineering,5,S2,TCH010
+CS408,Faculty of Computing,Software Engineering,5,S2,TCH001
+CS409,Faculty of Computing,Software Engineering,5,S2,TCH002
+CS410,Faculty of Computing,Software Engineering,5,S2,TCH003
