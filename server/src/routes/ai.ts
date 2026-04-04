@@ -13,6 +13,7 @@ import {
   buildSessionBrief,
   sessionBriefToSystemContent,
 } from '../lib/aiSession.js';
+import { assistantMaxRoundsFallbackMessage, categorizeAssistantErrorMessage } from '../lib/assistantPolicy.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_TOOL_ROUNDS = 6;
@@ -152,7 +153,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const userId = (request.user as { sub: string }).sub;
     const role = (request.user as { role: string }).role as AiUserContext['role'];
     if (!allowRateLimit(userId)) {
-      return reply.status(429).send({ error: 'Too many requests. Try again in a minute.' });
+      return reply.status(429).send({ error: 'Too many requests. Try again in a minute.', code: 'rate_limit' });
     }
 
     const ctx: AiUserContext = { userId, role };
@@ -172,6 +173,8 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     let rounds = 0;
     let lastAssistantText: string | null = null;
     let latestProposal: AssistantProposalResult | null = null;
+    const usedTools = new Set<string>();
+    const reqId = String((request as { id?: string }).id ?? '');
 
     try {
       while (rounds < MAX_TOOL_ROUNDS) {
@@ -197,6 +200,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
         for (const call of toolCalls) {
           const name = call.function?.name ?? '';
+          if (name) usedTools.add(name);
           const args = call.function?.arguments ?? '{}';
           const result = await executeAiTool(name, args, ctx);
           try {
@@ -221,6 +225,10 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      if (lastAssistantText === null && rounds >= MAX_TOOL_ROUNDS) {
+        lastAssistantText = assistantMaxRoundsFallbackMessage();
+      }
+
       if (lastAssistantText === null) {
         const last = messages[messages.length - 1];
         if (last?.role === 'assistant' && typeof last.content === 'string') {
@@ -229,6 +237,17 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
           lastAssistantText = 'Sorry, I could not finish that request. Please try again.';
         }
       }
+
+      request.log.info(
+        {
+          reqId,
+          userId,
+          rounds,
+          used_tools: Array.from(usedTools),
+          proposal: latestProposal?.action ?? null,
+        },
+        'assistant_chat_completed'
+      );
 
       return {
         message: {
@@ -255,8 +274,12 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Assistant request failed';
-      request.log.warn({ err: e }, 'openrouter_chat_failed');
-      return reply.status(502).send({ error: msg });
+      const cat = categorizeAssistantErrorMessage(msg);
+      request.log.warn(
+        { err: e, reqId, userId, rounds, used_tools: Array.from(usedTools), code: cat.code },
+        'assistant_chat_failed'
+      );
+      return reply.status(cat.status).send({ error: msg, code: cat.code });
     }
   });
 
@@ -275,12 +298,14 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
     if (parsed.data.confirmed === false) {
       const cancelled = await cancelAssistantProposal(parsed.data.proposal_id, ctx);
-      if (!cancelled.ok) return reply.status(400).send({ error: cancelled.error });
+      if (!cancelled.ok) return reply.status(400).send({ error: cancelled.error, code: 'proposal_cancel_failed' });
+      request.log.info({ userId, proposal_id: parsed.data.proposal_id }, 'assistant_proposal_cancelled');
       return { ok: true, cancelled: true };
     }
 
     const result = await confirmAssistantProposal(parsed.data.proposal_id, ctx);
-    if (!result.ok) return reply.status(400).send({ error: result.error });
+    if (!result.ok) return reply.status(400).send({ error: result.error, code: 'proposal_confirm_failed' });
+    request.log.info({ userId, proposal_id: parsed.data.proposal_id, action: result.action }, 'assistant_proposal_confirmed');
     return result;
   });
 };

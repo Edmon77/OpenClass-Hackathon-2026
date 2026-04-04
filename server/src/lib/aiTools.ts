@@ -3,13 +3,20 @@ import { prisma } from './prisma.js';
 import type { AiUserContext } from './aiContext.js';
 import { ADVANCE_REMINDER_HOURS, CUTOFF_MINUTES_DEFAULT } from './bookingNotifications.js';
 import { getRoomUiState } from './roomLifecycle.js';
+import {
+  ASSISTANT_ALL_EVENT_TYPES,
+  ASSISTANT_CR_EVENT_TYPES,
+  ASSISTANT_TEACHER_EVENT_TYPES,
+  isAssistantProposalExpired,
+  isAssistantEventTypeAllowed,
+} from './assistantPolicy.js';
 
 export type { AiUserContext } from './aiContext.js';
 
 /** Mirrors server/src/routes/bookings.ts — keep in sync for assistant answers. */
-const ALL_EVENT_TYPES = ['lecture', 'exam', 'tutor', 'defense', 'lab', 'presentation'] as const;
-const TEACHER_EVENT_TYPES = ['lecture', 'tutor', 'exam', 'lab', 'presentation'] as const;
-const CR_EVENT_TYPES = ['lecture', 'presentation', 'lab'] as const;
+const ALL_EVENT_TYPES = ASSISTANT_ALL_EVENT_TYPES;
+const TEACHER_EVENT_TYPES = ASSISTANT_TEACHER_EVENT_TYPES;
+const CR_EVENT_TYPES = ASSISTANT_CR_EVENT_TYPES;
 
 function jsonResult(data: unknown): string {
   return JSON.stringify(data);
@@ -67,6 +74,50 @@ function parseIsoDateTime(value: unknown): Date | null {
 
 function roomLabel(buildingName: string, roomNumber: string): string {
   return `${buildingName} ${roomNumber}`.trim();
+}
+
+async function getCrAssignmentForOfferingScope(
+  userId: string,
+  offering: { academicYearId: string; departmentId: string; year: number; section: string | null }
+) {
+  return prisma.crAssignment.findFirst({
+    where: {
+      userId,
+      academicYearId: offering.academicYearId,
+      isActive: true,
+      departmentId: offering.departmentId,
+      year: offering.year,
+      section: offering.section,
+    },
+  });
+}
+
+async function canUseAssistantBookingActions(
+  ctx: AiUserContext,
+  offering: { academicYearId: string; departmentId: string; year: number; section: string | null; teacherUserId: string | null },
+  eventTypeStr?: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (ctx.role === 'admin') return { ok: true };
+  if (ctx.role === 'teacher') {
+    if (!offering.teacherUserId || offering.teacherUserId !== ctx.userId) {
+      return { ok: false, error: 'Not assigned to this course offering' };
+    }
+    if (eventTypeStr) {
+      const allowed = isAssistantEventTypeAllowed('teacher', eventTypeStr);
+      if (!allowed.ok) return allowed;
+    }
+    return { ok: true };
+  }
+  if (ctx.role === 'student') {
+    const cr = await getCrAssignmentForOfferingScope(ctx.userId, offering);
+    if (!cr) return { ok: false, error: 'Class representative scope required for assistant booking actions' };
+    if (eventTypeStr) {
+      const allowed = isAssistantEventTypeAllowed('student', eventTypeStr);
+      if (!allowed.ok) return allowed;
+    }
+    return { ok: true };
+  }
+  return { ok: false, error: 'Forbidden' };
 }
 
 async function createAssistantProposal(
@@ -998,31 +1049,8 @@ async function proposeCreateBooking(ctx: AiUserContext, args: Record<string, unk
   if (!offering) return { error: 'Course offering not found' };
   if (!offering.academicYear.isActive) return { error: 'Academic year is not active' };
 
-  if (ctx.role === 'teacher') {
-    if (!offering.teacherUserId || offering.teacherUserId !== ctx.userId) {
-      return { error: 'Not assigned to this course offering' };
-    }
-    if (!(TEACHER_EVENT_TYPES as readonly string[]).includes(eventTypeStr)) {
-      return { error: `Teachers cannot create "${eventType}" events.` };
-    }
-  } else if (ctx.role === 'student') {
-    const cr = await prisma.crAssignment.findFirst({
-      where: {
-        userId: ctx.userId,
-        academicYearId: offering.academicYearId,
-        isActive: true,
-        departmentId: offering.departmentId,
-        year: offering.year,
-        section: offering.section,
-      },
-    });
-    if (!cr) return { error: 'CR scope required' };
-    if (!(CR_EVENT_TYPES as readonly string[]).includes(eventTypeStr)) {
-      return { error: `Class reps cannot create "${eventType}" events.` };
-    }
-  } else if (ctx.role !== 'admin') {
-    return { error: 'Forbidden' };
-  }
+  const policy = await canUseAssistantBookingActions(ctx, offering, eventTypeStr);
+  if (!policy.ok) return { error: policy.error };
 
   const clash = await prisma.booking.findFirst({
     where: {
@@ -1060,14 +1088,8 @@ async function proposeCancelBooking(ctx: AiUserContext, args: Record<string, unk
   if (!booking) return { error: 'Booking not found' };
   if (booking.status !== BookingStatus.booked) return { error: 'Booking is already cancelled' };
 
-  if (ctx.role === 'teacher') {
-    if (booking.courseOffering.teacherUserId !== ctx.userId) return { error: 'Forbidden for this booking' };
-  } else if (ctx.role === 'student') {
-    const canOwn = booking.bookedByUserId === ctx.userId;
-    if (!canOwn) return { error: 'Students can only cancel their own bookings' };
-  } else if (ctx.role !== 'admin') {
-    return { error: 'Forbidden' };
-  }
+  const policy = await canUseAssistantBookingActions(ctx, booking.courseOffering);
+  if (!policy.ok) return { error: policy.error };
 
   const payload: AssistantProposalPayload = { kind: 'cancel_booking', booking_id: bookingId };
   return createAssistantProposal(
@@ -1143,7 +1165,7 @@ export async function confirmAssistantProposal(
   });
   if (!proposal) return { ok: false, error: 'Proposal not found' };
   if (proposal.status !== 'pending') return { ok: false, error: `Proposal already ${proposal.status}` };
-  if (proposal.expiresAt.getTime() <= Date.now()) {
+  if (isAssistantProposalExpired(proposal.expiresAt)) {
     await prisma.assistantProposal.update({ where: { id: proposal.id }, data: { status: 'expired' } });
     return { ok: false, error: 'Proposal expired' };
   }
@@ -1164,6 +1186,17 @@ export async function confirmAssistantProposal(
     if (start.getTime() < Date.now()) {
       return { ok: false, error: 'start_time cannot be in the past' };
     }
+    const offering = await prisma.courseOffering.findFirst({
+      where: { id: payload.course_offering_id, isActive: true },
+      include: { academicYear: true },
+    });
+    if (!offering) return { ok: false, error: 'Course offering not found' };
+    if (!offering.academicYear.isActive) return { ok: false, error: 'Academic year is not active' };
+    const room = await prisma.room.findFirst({ where: { id: payload.room_id, isActive: true } });
+    if (!room) return { ok: false, error: 'Room not found' };
+    const eventTypeStr = payload.event_type ?? EventType.lecture;
+    const policy = await canUseAssistantBookingActions(ctx, offering, eventTypeStr);
+    if (!policy.ok) return { ok: false, error: policy.error };
     const clash = await prisma.booking.findFirst({
       where: {
         roomId: payload.room_id,
@@ -1175,9 +1208,9 @@ export async function confirmAssistantProposal(
     const booking = await prisma.booking.create({
       data: {
         roomId: payload.room_id,
-        courseOfferingId: payload.course_offering_id,
+        courseOfferingId: offering.id,
         bookedByUserId: ctx.userId,
-        eventType: payload.event_type ?? EventType.lecture,
+        eventType: eventTypeStr,
         startTime: start,
         endTime: end,
         status: BookingStatus.booked,
@@ -1192,9 +1225,14 @@ export async function confirmAssistantProposal(
   }
 
   if (payload.kind === 'cancel_booking') {
-    const row = await prisma.booking.findUnique({ where: { id: payload.booking_id } });
+    const row = await prisma.booking.findUnique({
+      where: { id: payload.booking_id },
+      include: { courseOffering: true },
+    });
     if (!row) return { ok: false, error: 'Booking not found' };
     if (row.status !== BookingStatus.booked) return { ok: false, error: 'Booking already cancelled' };
+    const policy = await canUseAssistantBookingActions(ctx, row.courseOffering);
+    if (!policy.ok) return { ok: false, error: policy.error };
     await prisma.booking.update({ where: { id: row.id }, data: { status: BookingStatus.cancelled } });
     await prisma.assistantProposal.update({
       where: { id: proposal.id },
@@ -1314,7 +1352,6 @@ export async function executeAiTool(
           name: u.name,
           student_id: u.studentId,
           role: u.role,
-          email: u.email,
           faculty: u.faculty?.name ?? null,
           department: u.department?.name ?? null,
           year: u.year,

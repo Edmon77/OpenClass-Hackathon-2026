@@ -11,7 +11,7 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/src/context/AuthContext';
@@ -37,6 +37,7 @@ type StudentHit = { id: string; student_id: string; name: string; section: strin
 
 export default function CrSetupScreen() {
   const { user } = useAuth();
+  const router = useRouter();
   const mySection = user?.section?.trim() || user?.class_section?.trim() || 'A';
   const [allowed, setAllowed] = useState(false);
   const [courseName, setCourseName] = useState('');
@@ -198,6 +199,13 @@ export default function CrSetupScreen() {
     } catch (e) { Alert.alert('Error', String(e)); }
   }
 
+  function askAssistantForCrHelp() {
+    router.push({
+      pathname: '/(app)/(tabs)/(assistant)',
+      params: { q: 'I am a class rep. Help me assign or replace teachers for my offerings and check missing setup.' },
+    });
+  }
+
   if (!isApiConfigured()) return <EmptyState icon="cloud-offline-outline" title="API not configured" />;
   if (!user) return null;
   if (!allowed) {
@@ -218,6 +226,10 @@ export default function CrSetupScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.campus} />}
       >
         <SectionHeader title="Add course offering" style={{ marginTop: 0 }} />
+        <Pressable style={styles.aiQuickBtn} onPress={askAssistantForCrHelp}>
+          <Ionicons name="sparkles-outline" size={16} color={colors.accent} />
+          <Text style={styles.aiQuickBtnText}>Ask AI for CR setup help</Text>
+        </Pressable>
         <GroupedCard style={{ padding: space.lg, marginBottom: space.lg }}>
           <Text style={styles.desc}>Creates a catalog course and ties it to your cohort for the active academic year.</Text>
           <TextInput style={styles.input} placeholder="Course name" placeholderTextColor={colors.tertiaryLabel} value={courseName} onChangeText={setCourseName} />
@@ -342,6 +354,18 @@ export default function CrSetupScreen() {
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: colors.groupedBackground },
   container: { padding: space.lg, paddingBottom: space.xxl * 2 },
+  aiQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginBottom: space.sm,
+    paddingVertical: 6,
+    paddingHorizontal: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentMuted,
+  },
+  aiQuickBtnText: { ...type.caption1, color: colors.accent, fontWeight: '700' },
   desc: { ...type.subhead, color: colors.secondaryLabel, marginBottom: space.md },
   input: { backgroundColor: colors.secondarySystemBackground, borderRadius: radius.md, padding: space.md, marginBottom: space.sm, ...type.body, color: colors.label },
   courseBlock: { marginBottom: space.sm },

@@ -98,6 +98,13 @@ function TeacherSchedule() {
     ]);
   }
 
+  function askAssistant() {
+    router.push({
+      pathname: '/(app)/(tabs)/(assistant)',
+      params: { q: 'Review my assigned courses and bookings, then suggest what I should do next today.' },
+    });
+  }
+
   return (
     <FlatList
       style={styles.flat}
@@ -149,6 +156,10 @@ function TeacherSchedule() {
             <Text style={styles.exploreBtnTxt}>Book a room</Text>
             <Ionicons name="chevron-forward" size={18} color={colors.tertiaryLabel} />
           </Pressable>
+          <Pressable style={styles.aiQuickBtn} onPress={askAssistant}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.accent} />
+            <Text style={styles.aiQuickBtnText}>Ask AI to optimize my day</Text>
+          </Pressable>
           <SectionHeader title="My bookings" />
         </View>
       }
@@ -199,6 +210,16 @@ function StudentSchedule() {
   useFocusEffect(useCallback(() => { load().catch(() => {}); }, [load]));
   async function onRefresh() { setRefreshing(true); try { await load(); } finally { setRefreshing(false); } }
 
+  function askAssistant() {
+    const prompt = isCr
+      ? 'Check my class rep courses and bookings, then suggest any missing teacher or room actions this week.'
+      : 'Summarize my classes and upcoming room-related tasks this week.';
+    router.push({
+      pathname: '/(app)/(tabs)/(assistant)',
+      params: { q: prompt },
+    });
+  }
+
   return (
     <FlatList
       style={styles.flat}
@@ -232,6 +253,10 @@ function StudentSchedule() {
               </GroupedCard>
             </>
           )}
+          <Pressable style={styles.aiQuickBtn} onPress={askAssistant}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.accent} />
+            <Text style={styles.aiQuickBtnText}>Ask AI about my schedule</Text>
+          </Pressable>
           <SectionHeader title="My courses" style={isCr ? {} : { marginTop: 0 }} />
         </View>
       }
@@ -376,4 +401,15 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   exploreBtnTxt: { ...type.headline, color: colors.campus, flex: 1 },
+  aiQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: colors.accentMuted,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    marginBottom: space.lg,
+  },
+  aiQuickBtnText: { ...type.subhead, color: colors.accent, fontWeight: '600' },
 });

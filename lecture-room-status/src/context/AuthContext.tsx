@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { apiFetch, getStoredToken, setStoredToken } from '../api/client';
 import { isApiConfigured } from '../api/config';
 import { probeApiHealth, unreachableApiMessage } from '../api/connection';
+import { clearAssistantStorageForUser, clearLegacyAssistantStorage } from '../lib/assistantSession';
 
 export type AuthUser = {
   id: string;
@@ -137,9 +138,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    if (user?.id) {
+      await clearAssistantStorageForUser(user.id);
+    }
+    await clearLegacyAssistantStorage();
     await setStoredToken(null);
     setUser(null);
-  }, []);
+  }, [user?.id]);
 
   const changePassword = useCallback(
     async (newPassword: string) => {

@@ -45,14 +45,44 @@ export async function apiFetch<T>(
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const res = await fetch(`${base}${path}`, {
-    ...fetchOptions,
-    headers,
-    body: body ?? fetchOptions.body,
-    signal: fetchOptions.signal ?? controller.signal,
-  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const externalSignal = fetchOptions.signal;
+  let removeExternalAbortListener: (() => void) | null = null;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      const onAbort = () => controller.abort();
+      externalSignal.addEventListener('abort', onAbort, { once: true });
+      removeExternalAbortListener = () => externalSignal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}${path}`, {
+      ...fetchOptions,
+      headers,
+      body: body ?? fetchOptions.body,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (removeExternalAbortListener) removeExternalAbortListener();
+    const name = e && typeof e === 'object' && 'name' in e ? String((e as { name: string }).name) : '';
+    if (name === 'AbortError') {
+      if (timedOut) throw new Error(`timeout:${timeoutMs}`);
+      throw new Error('aborted');
+    }
+    throw e;
+  }
   clearTimeout(timer);
+  if (removeExternalAbortListener) removeExternalAbortListener();
 
   const text = await res.text();
   let data: unknown = null;

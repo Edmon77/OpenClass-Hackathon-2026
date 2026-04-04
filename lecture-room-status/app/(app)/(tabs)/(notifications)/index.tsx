@@ -7,7 +7,7 @@ import {
   StyleSheet,
   RefreshControl,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { apiFetch } from '@/src/api/client';
@@ -58,6 +58,7 @@ function groupByDate(items: Row[]): Section[] {
 }
 
 export default function NotificationsScreen() {
+  const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -85,6 +86,13 @@ export default function NotificationsScreen() {
     } catch {}
   }
 
+  function askAssistant() {
+    router.push({
+      pathname: '/(app)/(tabs)/(assistant)',
+      params: { q: 'Summarize my unread notifications and tell me what I should do next.' },
+    });
+  }
+
   const sections = useMemo(() => groupByDate(rows), [rows]);
   const unread = rows.filter((r) => !r.is_read).length;
 
@@ -100,6 +108,10 @@ export default function NotificationsScreen() {
           <Text style={styles.markAllText}>Mark all read ({unread})</Text>
         </Pressable>
       )}
+      <Pressable onPress={askAssistant} style={styles.aiQuickBtn}>
+        <Ionicons name="sparkles-outline" size={16} color={colors.accent} />
+        <Text style={styles.aiQuickBtnText}>Summarize with AI</Text>
+      </Pressable>
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
@@ -152,6 +164,19 @@ const styles = StyleSheet.create({
     marginBottom: space.xs,
   },
   markAllText: { ...type.subhead, color: colors.accent, fontWeight: '600' },
+  aiQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginHorizontal: space.lg,
+    marginBottom: space.xs,
+    paddingVertical: 6,
+    paddingHorizontal: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentMuted,
+  },
+  aiQuickBtnText: { ...type.caption1, color: colors.accent, fontWeight: '700' },
   sectionTitle: {
     ...type.caption1,
     color: colors.tertiaryLabel,

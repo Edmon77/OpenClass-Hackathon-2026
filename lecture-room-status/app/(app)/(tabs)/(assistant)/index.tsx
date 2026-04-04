@@ -14,10 +14,11 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { usePathname, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
 import { apiFetch } from '@/src/api/client';
 import { isApiConfigured } from '@/src/api/config';
+import { assistantStorageKeyForUser, clearLegacyAssistantStorage } from '@/src/lib/assistantSession';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { colors, radius, space, type } from '@/src/theme/tokens';
 
@@ -43,8 +44,6 @@ type ChatTurn = {
   actions?: SuggestedAction[];
   proposal?: Proposal;
 };
-
-const STORAGE_KEY = 'campus_assistant_messages_v1';
 
 function suggestionChips(role: string, isCr: boolean): { label: string; text: string }[] {
   if (role === 'student' && isCr) {
@@ -78,6 +77,7 @@ function suggestionChips(role: string, isCr: boolean): { label: string; text: st
 
 export default function AssistantScreen() {
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ q?: string | string[] }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const pathname = usePathname();
@@ -87,11 +87,28 @@ export default function AssistantScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCr, setIsCr] = useState(false);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatTurn>>(null);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const lastPrefillRef = useRef<string | null>(null);
+  const storageKey = user ? assistantStorageKeyForUser(user.id) : null;
+
+  useEffect(() => {
+    clearLegacyAssistantStorage().catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    AsyncStorage.getItem(STORAGE_KEY)
+    setMessages([]);
+    setError(null);
+    setHydrated(false);
+    if (!storageKey) {
+      setHydrated(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+    AsyncStorage.getItem(storageKey)
       .then((raw) => {
         if (cancelled || !raw) return;
         try {
@@ -112,12 +129,24 @@ export default function AssistantScreen() {
     return () => {
       cancelled = true;
     };
+  }, [storageKey]);
+
+  useEffect(() => {
+    return () => {
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(messages)).catch(() => {});
-  }, [messages, hydrated]);
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!hydrated || !storageKey) return;
+    AsyncStorage.setItem(storageKey, JSON.stringify(messages)).catch(() => {});
+  }, [messages, hydrated, storageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +168,61 @@ export default function AssistantScreen() {
     };
   }, [user]);
 
+  function isLikelyTransientAssistantError(msg: string): boolean {
+    const x = msg.toLowerCase();
+    return (
+      x.includes('timeout:') ||
+      x.includes('aborted') ||
+      x.includes('temporarily unavailable') ||
+      x.includes('bad gateway') ||
+      x.includes('gateway') ||
+      x.includes('openrouter')
+    );
+  }
+
+  async function requestAiChat(
+    history: ChatTurn[],
+    attempt = 1
+  ): Promise<{ message: { role: string; content: string }; proposal?: Proposal; suggested_actions?: SuggestedAction[] }> {
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
+    try {
+      const roomMatch = pathname.match(/\/room\/([^/]+)/);
+      const buildingMatch = pathname.match(/\/building\/([^/]+)/);
+      const bookingMatch = pathname.match(/\/bookings\/([^/]+)/);
+      return await apiFetch<{
+        message: { role: string; content: string };
+        proposal?: Proposal;
+        suggested_actions?: SuggestedAction[];
+      }>('/ai/chat', {
+        method: 'POST',
+        json: {
+          messages: history.map((m) => ({ role: m.role, content: m.content })),
+          client_context: {
+            screen: 'campus_assistant',
+            platform: Platform.OS,
+            route: pathname,
+            room_id: roomMatch?.[1],
+            building_id: buildingMatch?.[1],
+            booking_id: bookingMatch?.[1],
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          },
+        },
+        timeoutMs: 120_000,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Request failed';
+      if (attempt < 2 && isLikelyTransientAssistantError(msg)) {
+        return requestAiChat(history, attempt + 1);
+      }
+      throw e;
+    } finally {
+      if (requestAbortRef.current === controller) requestAbortRef.current = null;
+    }
+  }
+
   function makeId(prefix: string): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
@@ -146,7 +230,8 @@ export default function AssistantScreen() {
   async function handleSuggestedAction(action: SuggestedAction): Promise<void> {
     if (action.type === 'confirm_proposal' || action.type === 'cancel_proposal') {
       const proposalId = String(action.payload.proposal_id ?? '');
-      if (!proposalId) return;
+      if (!proposalId || loading || actionBusyId) return;
+      setActionBusyId(proposalId);
       setLoading(true);
       setError(null);
       try {
@@ -166,6 +251,7 @@ export default function AssistantScreen() {
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Action failed');
       } finally {
+        setActionBusyId(null);
         setLoading(false);
       }
       return;
@@ -199,29 +285,7 @@ export default function AssistantScreen() {
       setLoading(true);
 
       try {
-        const roomMatch = pathname.match(/\/room\/([^/]+)/);
-        const buildingMatch = pathname.match(/\/building\/([^/]+)/);
-        const bookingMatch = pathname.match(/\/bookings\/([^/]+)/);
-        const res = await apiFetch<{
-          message: { role: string; content: string };
-          proposal?: Proposal;
-          suggested_actions?: SuggestedAction[];
-        }>('/ai/chat', {
-          method: 'POST',
-          json: {
-            messages: history.map((m) => ({ role: m.role, content: m.content })),
-            client_context: {
-              screen: 'campus_assistant',
-              platform: Platform.OS,
-              route: pathname,
-              room_id: roomMatch?.[1],
-              building_id: buildingMatch?.[1],
-              booking_id: bookingMatch?.[1],
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-          },
-          timeoutMs: 120_000,
-        });
+        const res = await requestAiChat(history);
         const reply = res.message?.content?.trim() ?? '';
         setMessages((prev) => [
           ...prev,
@@ -256,10 +320,22 @@ export default function AssistantScreen() {
   const onSend = useCallback(() => void sendMessage(input), [input, sendMessage]);
 
   const clearThread = useCallback(() => {
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
     setMessages([]);
     setError(null);
-    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
-  }, []);
+    if (storageKey) AsyncStorage.removeItem(storageKey).catch(() => {});
+  }, [storageKey]);
+
+  useEffect(() => {
+    const raw = params.q;
+    const q = Array.isArray(raw) ? raw[0] : raw;
+    const text = typeof q === 'string' ? q.trim() : '';
+    if (!text || !hydrated || !user) return;
+    if (lastPrefillRef.current === text) return;
+    lastPrefillRef.current = text;
+    void sendMessage(text);
+  }, [params.q, hydrated, user, sendMessage]);
 
   if (!isApiConfigured() || !user) {
     return <EmptyState icon="cloud-offline-outline" title="Sign in required" subtitle="Configure API URL and sign in to use the assistant." />;
@@ -321,16 +397,27 @@ export default function AssistantScreen() {
               <View style={styles.proposalCard}>
                 <Text style={styles.proposalTitle}>Confirmation required</Text>
                 <Text style={styles.proposalText}>{item.proposal.summary}</Text>
-                <Text style={styles.proposalMeta}>Expires: {item.proposal.expires_at}</Text>
+                <Text style={styles.proposalMeta}>Expires: {new Date(item.proposal.expires_at).toLocaleString()}</Text>
               </View>
             ) : null}
             {item.actions?.length ? (
               <View style={styles.actionsRow}>
-                {item.actions.map((a: SuggestedAction) => (
-                  <Pressable key={`${item.id}-${a.type}-${a.label}`} style={styles.actionBtn} onPress={() => void handleSuggestedAction(a)} disabled={loading}>
-                    <Text style={styles.actionBtnText}>{a.label}</Text>
-                  </Pressable>
-                ))}
+                {item.actions.map((a: SuggestedAction) => {
+                  const proposalId = String(a.payload?.proposal_id ?? '');
+                  const expiresAt = item.proposal ? new Date(item.proposal.expires_at).getTime() : null;
+                  const expired = expiresAt != null && expiresAt <= Date.now();
+                  const disabled = loading || expired || (!!actionBusyId && actionBusyId !== proposalId);
+                  return (
+                    <Pressable
+                      key={`${item.id}-${a.type}-${a.label}`}
+                      style={[styles.actionBtn, disabled && styles.actionBtnDisabled]}
+                      onPress={() => void handleSuggestedAction(a)}
+                      disabled={disabled}
+                    >
+                      <Text style={styles.actionBtnText}>{expired ? `${a.label} (expired)` : a.label}</Text>
+                    </Pressable>
+                  );
+                })}
               </View>
             ) : null}
           </View>
@@ -521,6 +608,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: radius.pill,
     backgroundColor: colors.accentMuted,
+  },
+  actionBtnDisabled: {
+    opacity: 0.5,
   },
   actionBtnText: {
     ...type.caption1,

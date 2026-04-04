@@ -347,6 +347,16 @@ export default function RoomDetailScreen() {
     await cancel();
   }
 
+  function askAssistantAboutRoom() {
+    const hint = roomNum
+      ? `Summarize this room (${roomNum}) and suggest the next best booking option for me.`
+      : 'Summarize this room and suggest the next best booking option for me.';
+    router.push({
+      pathname: '/(app)/(tabs)/(assistant)',
+      params: { q: hint },
+    });
+  }
+
   if (!isApiConfigured()) return <EmptyState icon="cloud-offline-outline" title="Configure API URL" />;
 
   return (
@@ -429,6 +439,7 @@ export default function RoomDetailScreen() {
             <PrimaryButton title="Book this room" onPress={openBookingModal} style={{ flex: 1 }} />
           )}
           <SecondaryButton title="Notify me" onPress={subscribeRoomAlert} style={{ flex: canBook ? 1 : undefined }} />
+          <SecondaryButton title="Ask AI" onPress={askAssistantAboutRoom} style={{ flex: canBook ? 1 : undefined }} />
         </View>
 
         {/* Schedule strip */}
