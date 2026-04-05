@@ -28,8 +28,15 @@ export async function buildApp(): Promise<FastifyInstance> {
     throw new Error('JWT_SECRET must be set and at least 32 characters');
   }
 
+  /** Browsers reject `Access-Control-Allow-Origin: *` when `credentials: true`. Use reflect (true) for dev "*". */
+  const corsRaw = process.env.CORS_ORIGIN?.trim();
+  const corsOrigin =
+    !corsRaw || corsRaw === '*'
+      ? true
+      : corsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+
   await app.register(cors, {
-    origin: process.env.CORS_ORIGIN?.split(',') ?? true,
+    origin: corsOrigin,
     credentials: true,
   });
 
