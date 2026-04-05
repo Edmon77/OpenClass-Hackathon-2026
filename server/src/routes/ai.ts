@@ -80,51 +80,76 @@ type LlmChatConfig = {
   label: string;
 };
 
-function resolveLlmChatConfig(): LlmChatConfig | null {
+type LlmHttpError = Error & { statusCode: number };
+
+function groqLlmConfig(): LlmChatConfig | null {
   const groqKey = process.env.GROQ_API_KEY?.trim();
-  if (groqKey) {
-    return {
-      url: GROQ_CHAT_URL,
-      apiKey: groqKey,
-      model: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
-      headers: { 'Content-Type': 'application/json' },
-      label: 'Groq',
-    };
-  }
+  if (!groqKey) return null;
+  return {
+    url: GROQ_CHAT_URL,
+    apiKey: groqKey,
+    model: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
+    headers: { 'Content-Type': 'application/json' },
+    label: 'Groq',
+  };
+}
+
+function openrouterLlmConfig(): LlmChatConfig | null {
   const orKey = process.env.OPENROUTER_API_KEY?.trim();
-  if (orKey) {
-    const referer = process.env.OPENROUTER_HTTP_REFERER;
-    const title = process.env.OPENROUTER_APP_TITLE ?? 'Lecture Room Status';
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (referer) headers.Referer = referer;
-    headers['X-Title'] = title;
-    return {
-      url: OPENROUTER_URL,
-      apiKey: orKey,
-      // Default free router; paid models need a key with access.
-      model: process.env.OPENROUTER_MODEL?.trim() || 'openrouter/free',
-      headers,
-      label: 'OpenRouter',
-    };
-  }
-  return null;
+  if (!orKey) return null;
+  const referer = process.env.OPENROUTER_HTTP_REFERER;
+  const title = process.env.OPENROUTER_APP_TITLE ?? 'Lecture Room Status';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (referer) headers.Referer = referer;
+  headers['X-Title'] = title;
+  return {
+    url: OPENROUTER_URL,
+    apiKey: orKey,
+    model: process.env.OPENROUTER_MODEL?.trim() || 'openrouter/free',
+    headers,
+    label: 'OpenRouter',
+  };
+}
+
+/** Groq first when both keys are set; OpenRouter used as fallback on rate limits / overload. */
+function buildLlmProviderChain(): LlmChatConfig[] {
+  const chain: LlmChatConfig[] = [];
+  const g = groqLlmConfig();
+  const o = openrouterLlmConfig();
+  if (g) chain.push(g);
+  if (o) chain.push(o);
+  return chain;
 }
 
 function isAssistantLlmConfigured(): boolean {
-  return resolveLlmChatConfig() != null;
+  return buildLlmProviderChain().length > 0;
 }
 
-async function llmChatCompletion(
+function isRetryableWithNextProvider(err: unknown): boolean {
+  const status =
+    err && typeof err === 'object' && 'statusCode' in err && typeof (err as LlmHttpError).statusCode === 'number'
+      ? (err as LlmHttpError).statusCode
+      : 0;
+  if (status === 429 || status === 503) return true;
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  if (msg.includes('rate limit')) return true;
+  if (msg.includes('tokens per minute')) return true;
+  if (msg.includes('token per minute')) return true;
+  if (msg.includes('tpm')) return true;
+  if (msg.includes('resource exhausted')) return true;
+  if (msg.includes('too many requests')) return true;
+  return false;
+}
+
+async function llmChatCompletionWithProvider(
+  cfg: LlmChatConfig,
   messages: ApiMessage[],
   tools: ReturnType<typeof getAiToolDefinitions>
 ): Promise<{
   message: { role: string; content: string | null; tool_calls?: ToolCall[] };
 }> {
-  const cfg = resolveLlmChatConfig();
-  if (!cfg) throw new Error('No LLM API key configured (set GROQ_API_KEY or OPENROUTER_API_KEY)');
-
   const headers: Record<string, string> = {
     ...cfg.headers,
     Authorization: `Bearer ${cfg.apiKey}`,
@@ -147,7 +172,9 @@ async function llmChatCompletion(
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(`${cfg.label} returned non-JSON`);
+    const e = new Error(`${cfg.label} returned non-JSON`) as LlmHttpError;
+    e.statusCode = res.status;
+    throw e;
   }
 
   if (!res.ok) {
@@ -160,7 +187,9 @@ async function llmChatCompletion(
       msg = typeof err.error === 'string' ? err.error : err.error.message;
     }
     msg = msg ?? err?.message ?? text.slice(0, 200);
-    throw new Error(msg || `${cfg.label} HTTP ${res.status}`);
+    const e = new Error(msg || `${cfg.label} HTTP ${res.status}`) as LlmHttpError;
+    e.statusCode = res.status;
+    throw e;
   }
 
   const parsed = data as {
@@ -172,12 +201,43 @@ async function llmChatCompletion(
   return { message: message as { role: string; content: string | null; tool_calls?: ToolCall[] } };
 }
 
+async function llmChatCompletion(
+  messages: ApiMessage[],
+  tools: ReturnType<typeof getAiToolDefinitions>
+): Promise<{
+  message: { role: string; content: string | null; tool_calls?: ToolCall[] };
+}> {
+  const chain = buildLlmProviderChain();
+  if (!chain.length) throw new Error('No LLM API key configured (set GROQ_API_KEY and/or OPENROUTER_API_KEY)');
+
+  let lastErr: unknown = null;
+  for (let i = 0; i < chain.length; i++) {
+    const cfg = chain[i]!;
+    try {
+      return await llmChatCompletionWithProvider(cfg, messages, tools);
+    } catch (e) {
+      lastErr = e;
+      const hasNext = i < chain.length - 1;
+      if (hasNext && isRetryableWithNextProvider(e)) {
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export const aiRoutes: FastifyPluginAsync = async (app) => {
   /** No auth — use to verify the API is the one with Assistant routes (avoids confusing "Not Found"). */
-  app.get('/', async () => ({
-    ok: true,
-    assistant: 'POST /ai/chat (Bearer JWT required)',
-  }));
+  app.get('/', async () => {
+    const chain = buildLlmProviderChain();
+    return {
+      ok: true,
+      assistant: 'POST /ai/chat (Bearer JWT required)',
+      llm_providers: chain.map((c) => c.label),
+      llm_fallback_enabled: chain.length > 1,
+    };
+  });
 
   app.post('/chat', { preHandler: [app.authenticate] }, async (request, reply) => {
     if (!isAssistantLlmConfigured()) {
