@@ -340,5 +340,5 @@ Under `csv-templates/` you will find CSV layouts intended to align with administ
 
 ## Further documentation
 
-- **`LECTURE_ROOM_STATUS_SYSTEM_DOCUMENTATION.md`** - Product and workflow specification (roles, room lifecycle, booking rules, UI expectations).
+- **`OPEN_CLASS_SYSTEM_DOCUMENTATION.md`** - Formal system specification for reviewers (roles, lifecycle, booking rules, AI assistant, data model, API index).
 - **`lecture-room-status/README.md`** - Mobile-focused quick start and project tree.

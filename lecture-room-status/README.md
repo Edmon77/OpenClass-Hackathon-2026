@@ -4,7 +4,7 @@ A **mobile-first** campus app for **live room state**-where classes are, what is
 
 The **Campus Assistant** tab is **not** a basic chatbot. It talks to a **server-side AI agent**: the backend runs **tool calls** against the real campus database (under your login and role), can **chain multiple tools** per question, and only applies changes after you **confirm** a **proposal** (e.g. new booking)-same trust model as the rest of the app.
 
-For **full architecture, AI design, API tables, and Docker bootstrap**, see the [root README](../README.md).
+For **full architecture, AI design, API tables, and Docker bootstrap**, see the [root README](../README.md). For the **reviewer-facing system specification** (requirements, data model, API index), see [OPEN_CLASS_SYSTEM_DOCUMENTATION.md](../OPEN_CLASS_SYSTEM_DOCUMENTATION.md).
 
 ## Tech Stack
 

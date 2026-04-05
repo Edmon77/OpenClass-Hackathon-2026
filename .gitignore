@@ -47,7 +47,6 @@ system building assets /
 
 # Internal docs / plans (not for GitHub)
 REACT_NATIVE_IMPLEMENTATION_PLAN.md
-LECTURE_ROOM_STATUS_SYSTEM_DOCUMENTATION.md
 *.plan.md
 #NDM
 my app 2/server/node_modules
