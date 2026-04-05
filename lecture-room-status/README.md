@@ -1,6 +1,10 @@
 # Lecture Room Status
 
-A role-based campus room visibility and booking platform. Teachers and class representatives book rooms, students see live availability, and admins manage the entire system — all from a single mobile app.
+A **mobile-first** campus app for **live room state**-where classes are, what is free or about to start, and who may use a room under policy-not just another admin portal. Teachers and class representatives **book against real offerings** with conflict checks; students see **their** context, alerts, and optional room watches; admins keep buildings, cohorts, and access aligned so the map on everyone’s phone stays credible.
+
+The **Campus Assistant** tab is **not** a basic chatbot. It talks to a **server-side AI agent**: the backend runs **tool calls** against the real campus database (under your login and role), can **chain multiple tools** per question, and only applies changes after you **confirm** a **proposal** (e.g. new booking)-same trust model as the rest of the app.
+
+For **full architecture, AI design, API tables, and Docker bootstrap**, see the [root README](../README.md).
 
 ## Tech Stack
 
@@ -13,28 +17,31 @@ A role-based campus room visibility and booking platform. Teachers and class rep
 | Database | PostgreSQL 16 |
 | Auth | JWT (access tokens via `@fastify/jwt`) |
 | Passwords | bcrypt (server-side) |
+| Assistant | Groq or OpenRouter (OpenAI-compatible chat + tool calling); see root README |
 | Infrastructure | Docker Compose (API + Postgres) |
 
 ## Features
 
-- **Live room status** — green (free), yellow (booked soon), red (class in progress)
-- **Spatial exploration** — drill from Campus → Building → Floor → Room like navigating folders
-- **Building-wide search** — find any room by ID across all floors
-- **QR quick access** — scan a room's QR code to jump straight to its details
-- **Booking system** — teachers and CRs book rooms with overlap prevention
-- **Temporary use** — students can use free/yellow rooms until a configurable cutoff before class
-- **"Notify me" alerts** — subscribe to a room and get warned before the next class starts (auto-expires in 2 hours)
-- **Notifications** — advance reminders, class start, cutoff warnings, cancellations
-- **Role-based access** — Student, CR (upgraded student), Teacher, Admin with scoped permissions
-- **Admin hub** — manage users, buildings/rooms, semesters, and CR assignments
-- **CR semester setup** — link courses to teachers for a department/year/class cohort
-- **Apple-inspired design** — tab bar navigation, grouped cards, spring animations, haptic feedback
+- **Live room status** - green (free), yellow (booked soon), red (class in progress)
+- **Spatial exploration** - drill from Campus → Building → Floor → Room
+- **Building-wide search** - find any room by ID across all floors
+- **QR quick access** - scan a room's QR code to jump straight to its details
+- **Booking system** - teachers and CRs book rooms with overlap prevention
+- **Temporary use** - students can use free/yellow rooms until a configurable cutoff before class
+- **"Notify me" alerts** - subscribe to a room and get warned before the next class starts (auto-expires in 2 hours)
+- **Notifications** - advance reminders, class start, cutoff warnings, cancellations
+- **Role-based access** - Student, CR (upgraded student), Teacher, Admin with scoped permissions
+- **Admin hub** - manage users, buildings/rooms, semesters, and CR assignments
+- **CR semester setup** - link courses to teachers for a department/year/class cohort
+- **Campus Assistant** - natural-language Q&A with tool-backed answers; proposals for writes; keyboard-friendly composer
+- **Apple-inspired design** - tab bar navigation, grouped cards, spring animations, haptic feedback
 
 ## Prerequisites
 
 - **Node.js** 20+
-- **Docker** and **Docker Compose**
+- **Docker** and **Docker Compose** (for the bundled backend)
 - **Expo Go** app on a physical device, or an Android/iOS emulator
+- **LLM API key** on the server (Groq or OpenRouter) if you want Assistant chat to work
 
 ## Getting Started
 
@@ -43,7 +50,8 @@ A role-based campus room visibility and booking platform. Teachers and class rep
 ```bash
 # Root .env (Docker Compose)
 cp .env.example .env
-# Edit .env — set POSTGRES_PASSWORD and JWT_SECRET (min 32 chars)
+# Edit .env - set POSTGRES_PASSWORD and JWT_SECRET (min 32 chars)
+# Optional: GROQ_API_KEY or OPENROUTER_API_KEY for the Assistant
 
 # Mobile app .env
 cp lecture-room-status/.env.example lecture-room-status/.env  # or create manually
@@ -58,13 +66,15 @@ cp lecture-room-status/.env.example lecture-room-status/.env  # or create manual
 docker compose up --build
 ```
 
-This starts PostgreSQL and the API server on port 3000. Prisma migrations run automatically on startup.
+This starts PostgreSQL and the API on port 3000. The API container runs **Prisma `db push`**, **seed**, then **ensure-demo-campus**, **ensure-demo-schedule**, and **reset-demo-passwords** so buildings, rooms, and schedule data are present on fresh volumes.
 
-### 3. Seed demo data (first time only)
+### 3. Optional: re-seed or repair demo data
 
 ```bash
-cd server
-npm run db:seed:docker
+docker compose exec api npx prisma db seed
+docker compose exec api node prisma/ensure-demo-campus.mjs
+docker compose exec api node prisma/ensure-demo-schedule.mjs
+docker compose exec api node prisma/reset-demo-passwords.mjs
 ```
 
 ### 4. Start the mobile app
@@ -79,12 +89,23 @@ Then press `a` (Android emulator), `i` (iOS simulator), `w` (web), or scan the Q
 
 ## Demo Accounts
 
+**Hackathon demo** (when seed + ensure scripts have run) - password **`Hackathon2026`**:
+
+| ID | Role / notes |
+|----|----------------|
+| HACKADM001 | Admin |
+| HACKSTU001 | Student (SE Y5 A - use for “My classes” on Schedule) |
+| HACKTCH001-003 | Teachers |
+| HACKCR001-002 | Students with CR assignments |
+
+**Legacy** (if present from full seed):
+
 | ID | Password | Role |
-|----------|------------|------|
+|----------|------------|--------|
 | ADMIN001 | admin123 | Admin |
 | TCH001 | teacher123 | Teacher |
-| STU001 | 123456 | Student (forced password change on first login) |
-| CR001 | 123456 | Student + CR (forced password change on first login) |
+| STU001 | 123456 | Student (may force password change on first login) |
+| CR001 | 123456 | Student + CR |
 
 ## Project Structure
 
@@ -92,32 +113,14 @@ Then press `a` (Android emulator), `i` (iOS simulator), `w` (web), or scan the Q
 ├── docker-compose.yml          # PostgreSQL + API containers
 ├── .env.example                # Docker env template
 │
-├── server/                     # Backend API
-│   ├── src/
-│   │   ├── index.ts            # Entry point
-│   │   ├── app.ts              # Fastify app setup
-│   │   ├── routes/
-│   │   │   ├── auth.ts         # Login, password change, /auth/me
-│   │   │   ├── admin.ts        # User/building/semester/CR management
-│   │   │   ├── buildings.ts    # Building list with status summaries
-│   │   │   ├── rooms.ts        # Room details and bookings
-│   │   │   ├── bookings.ts     # Create, cancel, list bookings
-│   │   │   ├── courses.ts      # CR course-teacher setup
-│   │   │   ├── notifications.ts# In-app notification CRUD
-│   │   │   ├── roomAlerts.ts   # "Notify me" subscriptions
-│   │   │   ├── settings.ts     # Server policy (cutoff, timezone)
-│   │   │   └── health.ts       # Health check
-│   │   └── lib/
-│   │       ├── prisma.ts       # Prisma client singleton
-│   │       ├── roomLifecycle.ts# Green/yellow/red state engine
-│   │       ├── bookingNotifications.ts
-│   │       └── errors.ts       # Typed API errors
+├── server/                     # Backend API (see root README)
+│   ├── src/routes/ai.ts        # POST /ai/chat, /ai/confirm
+│   ├── src/lib/aiTools.ts      # Tool definitions + proposal execution
 │   ├── prisma/
-│   │   ├── schema.prisma       # Database schema
-│   │   ├── seed.ts             # Demo data seeder
-│   │   └── migrations/         # SQL migrations
-│   ├── Dockerfile
-│   └── package.json
+│   │   ├── ensure-demo-campus.mjs
+│   │   ├── ensure-demo-schedule.mjs
+│   │   └── reset-demo-passwords.mjs
+│   └── ...
 │
 └── lecture-room-status/        # Mobile app (Expo)
     ├── app/
@@ -131,16 +134,17 @@ Then press `a` (Android emulator), `i` (iOS simulator), `w` (web), or scan the Q
     │           ├── _layout.tsx         # Bottom tab bar
     │           ├── (explore)/          # Campus → Building → Room
     │           ├── (schedule)/         # My Classes / Bookings / CR Setup
+    │           ├── (assistant)/        # Campus Assistant (AI)
     │           ├── (notifications)/    # Grouped alerts
     │           ├── (profile)/          # User info, settings, sign out
     │           └── (admin)/            # Admin hub + sub-screens
     ├── src/
     │   ├── api/                # API client with auth headers + timeout
     │   ├── context/            # AuthContext, PolicyContext
-    │   ├── components/ui/      # Shared components (StatusDot, GroupedCard, etc.)
+    │   ├── components/ui/      # Shared components
     │   ├── domain/             # Room state engine, booking conflict logic
     │   ├── hooks/              # useRoomAlertSubscription
-    │   ├── lib/                # Time formatting, local notifications
+    │   ├── lib/                # Time formatting, local notifications, assistant session
     │   └── theme/              # Design tokens, motion constants
     └── package.json
 ```
@@ -165,6 +169,8 @@ Example: `lecture-room://room/room-g201`
 | `JWT_SECRET` | JWT signing key (min 32 chars) | (required) |
 | `API_PORT` | Host port for the API | `3000` |
 | `CORS_ORIGIN` | Allowed origins | `*` |
+| `GROQ_API_KEY` | Optional; enables Assistant via Groq | - |
+| `OPENROUTER_API_KEY` | Optional; Assistant via OpenRouter if Groq unset | - |
 
 ### `lecture-room-status/.env` (Mobile app)
 
@@ -174,13 +180,8 @@ Example: `lecture-room://room/room-g201`
 
 ### `server/.env.example` (local dev without Docker)
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | JWT signing key |
-| `CUTOFF_MINUTES` | Minutes before class when temp use ends (default: 10) |
-| `ADVANCE_REMINDER_HOURS` | Hours before class for advance notification (default: 24) |
+See file for `DATABASE_URL`, `JWT_SECRET`, policy knobs, and LLM variables.
 
 ## License
 
-This project was built as coursework. No license is currently specified.
+No license file is included in this repository yet; add a `LICENSE` if you need explicit terms for reuse or distribution.
